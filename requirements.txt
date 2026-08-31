@@ -1,0 +1,31 @@
+# --- Web framework ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9          # file uploads
+
+# --- Data / ORM ---
+sqlalchemy==2.0.34
+psycopg2-binary==2.9.9
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0            # required for pydantic's EmailStr (schemas.py)
+
+# --- Statement extraction ---
+pdfplumber==0.11.4               # deterministic text + table extraction
+pypdf==4.3.1                     # metadata, decryption, page inspection
+pytesseract==0.3.13              # OCR fallback (needs system `tesseract-ocr`)
+pdf2image==1.17.0                # rasterize scanned PDFs (needs system `poppler-utils`)
+Pillow==10.4.0
+
+# --- Reporting ---
+reportlab==4.2.2                 # scorecard PDF generation
+openpyxl==3.1.5                  # financial-summary Excel export
+
+# --- Misc ---
+python-dateutil==2.9.0
+httpx==0.27.2                    # outbound calls to real KYC/CRB providers (later)
+
+# --- ML shadow-scoring (app/services/ml/) ---
+scikit-learn==1.5.2               # logistic-regression baseline + HistGradientBoosting
+numpy==2.1.1
+joblib==1.4.2                     # model artifact (de)serialization
