@@ -18,7 +18,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.graphics.shapes import Circle, Drawing, Line, String, Wedge
+from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String, Wedge
 from reportlab.platypus import (
     HRFlowable,
     KeepTogether,
@@ -56,7 +56,7 @@ for _base in ("Normal", "BodyText", "Title", "Heading3"):
 _styles["Title"].leading = 22
 _styles.add(ParagraphStyle("Wordmark", parent=_styles["Title"], fontName=_MONO_BOLD, textColor=_ACCENT, fontSize=20, leading=24))
 _styles.add(ParagraphStyle("Tagline", parent=_styles["Normal"], fontName=_MONO, textColor=_MUTED, fontSize=8, leading=10))
-_styles.add(ParagraphStyle("SectionHead", parent=_styles["Heading3"], fontName=_MONO_BOLD, textColor=_ACCENT_DARK, spaceBefore=2, spaceAfter=4))
+_styles.add(ParagraphStyle("SectionHead", parent=_styles["Heading3"], fontName=_MONO_BOLD, textColor=_ACCENT_DARK, spaceBefore=1, spaceAfter=2))
 _styles.add(ParagraphStyle("Cell", parent=_styles["BodyText"], fontName=_MONO, fontSize=8, leading=10))
 _styles.add(ParagraphStyle("CellSmall", parent=_styles["BodyText"], fontName=_MONO, fontSize=6.5, leading=8))
 _styles.add(ParagraphStyle("StatValue", parent=_styles["Normal"], fontName=_MONO_BOLD, fontSize=24, leading=27, textColor=_INK, alignment=1))
@@ -82,26 +82,30 @@ def _kv_table(rows: list[tuple[str, str]], col_widths=(58 * mm, 112 * mm)) -> Ta
         ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, _LIGHT]),
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D9D5EC")),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E8E5F5")),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
     ]))
     return t
 
 
-def _stat_card(value: str, label: str, width: float, accent: colors.Color = _ACCENT) -> Table:
+def _stat_card(value: str, label: str, width: float, accent: colors.Color = _ACCENT, value_font_size: int = 24) -> Table:
     """A single stat card: value on top, label below — two independent rows,
     so mixed font sizes never fight over one row's height."""
-    t = Table([[Paragraph(value, _styles["StatValue"])], [Paragraph(label, _styles["StatLabel"])]], colWidths=[width])
+    value_style = _styles["StatValue"]
+    if value_font_size != 24:
+        value_style = ParagraphStyle(f"StatValue{value_font_size}", parent=value_style,
+                                      fontSize=value_font_size, leading=value_font_size + 3)
+    t = Table([[Paragraph(value, value_style)], [Paragraph(label, _styles["StatLabel"])]], colWidths=[width])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), _LIGHT),
         ("BOX", (0, 0), (-1, -1), 1, accent),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (0, 0), 10),
+        ("TOPPADDING", (0, 0), (0, 0), 9),
         ("BOTTOMPADDING", (0, 0), (0, 0), 2),
         ("TOPPADDING", (0, 1), (0, 1), 0),
-        ("BOTTOMPADDING", (0, 1), (0, 1), 10),
+        ("BOTTOMPADDING", (0, 1), (0, 1), 9),
     ]))
     return t
 
@@ -138,30 +142,45 @@ def _gauge_angle(score: float) -> float:
 
 
 def _score_gauge(score: int, grade: str) -> Drawing:
-    width, height = 170 * mm, 78 * mm
-    cx, cy = width / 2, 6 * mm
-    outer_r, inner_r = 58 * mm, 38 * mm
+    """A compact gauge card: rounded-corner border, gauge sized to fit inside
+    it with room to spare, meant to sit beside the loan-limit card rather
+    than spanning the page on its own.
+
+    The pivot sits above the card's bottom edge (not on it) so the score and
+    grade readout can go *below* the pivot: the needle is a line from the
+    pivot outward at an angle in [0°, 180°], which means it can never have a
+    negative y-component — putting the readout below the pivot guarantees
+    the needle can never cross it, at any score.
+    """
+    width, height = 84 * mm, 59 * mm
+    cx, cy = width / 2, 19 * mm
+    outer_r, inner_r = 25 * mm, 14.5 * mm
     d = Drawing(width, height)
+
+    # Rounded-corner card background, drawn first so everything else sits on top.
+    d.add(Rect(0.6 * mm, 0.6 * mm, width - 1.2 * mm, height - 1.2 * mm,
+               rx=4 * mm, ry=4 * mm, fillColor=colors.white, strokeColor=colors.HexColor("#D9D5EC"), strokeWidth=1))
 
     for lo, hi, color, label in _GAUGE_BANDS:
         a0, a1 = _gauge_angle(hi), _gauge_angle(lo)  # higher score -> smaller angle (right side)
-        d.add(Wedge(cx, cy, outer_r, a0, a1, radius1=inner_r, fillColor=color, strokeColor=colors.white, strokeWidth=1.2))
+        d.add(Wedge(cx, cy, outer_r, a0, a1, radius1=inner_r, fillColor=color, strokeColor=colors.white, strokeWidth=0.7))
         mid = math.radians((a0 + a1) / 2)
-        lx, ly = cx + (outer_r + 6 * mm) * math.cos(mid), cy + (outer_r + 6 * mm) * math.sin(mid)
-        d.add(String(lx, ly, label, fontSize=6, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
+        lx, ly = cx + (outer_r + 4.4 * mm) * math.cos(mid), cy + (outer_r + 4.4 * mm) * math.sin(mid)
+        d.add(String(lx, ly, label, fontSize=4, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
 
     # Needle, clamped into [min, max] even if a rule pushed the score to the
     # engine's hard floor/ceiling.
     clamped = max(_GAUGE_MIN, min(_GAUGE_MAX, score))
     ang = math.radians(_gauge_angle(clamped))
-    needle_len = outer_r * 0.9
+    needle_len = outer_r * 0.85
     d.add(Line(cx, cy, cx + needle_len * math.cos(ang), cy + needle_len * math.sin(ang),
-               strokeColor=colors.HexColor("#1F2430"), strokeWidth=2.6))
-    d.add(Circle(cx, cy, 3 * mm, fillColor=_INK, strokeColor=None))
+               strokeColor=colors.HexColor("#1F2430"), strokeWidth=1.6))
+    d.add(Circle(cx, cy, 1.6 * mm, fillColor=_INK, strokeColor=None))
 
-    # Score + grade readout, inside the dial's hollow center.
-    d.add(String(cx, cy + 16 * mm, str(score), fontSize=30, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
-    d.add(String(cx, cy + 7 * mm, f"GRADE {grade}", fontSize=10, fillColor=_MUTED, textAnchor="middle", fontName=_MONO_BOLD))
+    # Score + grade readout, below the pivot — see the docstring for why
+    # that's the position the needle can never reach.
+    d.add(String(cx, cy - 8 * mm, str(score), fontSize=15, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
+    d.add(String(cx, cy - 12.5 * mm, f"GRADE {grade}", fontSize=6, fillColor=_MUTED, textAnchor="middle", fontName=_MONO_BOLD))
     return d
 
 
@@ -220,8 +239,8 @@ def _monthly_table(monthly: dict) -> Table:
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
     t.setStyle(TableStyle(style))
     return t
@@ -254,8 +273,8 @@ def _flagged_transactions_table(statement) -> Table | None:
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E8C48A")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
     return t
 
@@ -264,8 +283,8 @@ def build_scorecard_pdf(statement, score) -> str:
     out_dir = settings.storage_path / "reports"
     path = str(out_dir / f"scorecard_{statement.reference_id}.pdf")
 
-    doc = SimpleDocTemplate(path, pagesize=A4, topMargin=16 * mm, bottomMargin=16 * mm,
-                             leftMargin=14 * mm, rightMargin=14 * mm)
+    doc = SimpleDocTemplate(path, pagesize=A4, topMargin=12 * mm, bottomMargin=12 * mm,
+                             leftMargin=12 * mm, rightMargin=12 * mm)
     story = []
 
     # --- Header: brand wordmark + generation meta + status ---
@@ -285,25 +304,29 @@ def build_scorecard_pdf(statement, score) -> str:
     story.append(HRFlowable(width="100%", thickness=1.2, color=_ACCENT))
     story.append(Spacer(1, 2 * mm))
 
-    status_bar = Table([[Paragraph(f"<b>Status: {status_label}</b>", _styles["Cell"])]], colWidths=(180 * mm,))
+    status_bar = Table([[Paragraph(f"<b>Status: {status_label}</b>", _styles["Cell"])]], colWidths=(186 * mm,))
     status_bar.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), status_color),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
-    story += [status_bar, Spacer(1, 5 * mm)]
+    story += [status_bar, Spacer(1, 3 * mm)]
 
-    # --- Score gauge (score + grade read directly off the dial) plus the
-    # one remaining stat that doesn't fit inside it ---
-    story.append(_score_gauge(score.credit_score, score.grade))
-    story.append(Spacer(1, 2 * mm))
-    story.append(Table(
-        [[_stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "LOAN LIMIT", 90 * mm)]],
-        colWidths=(180 * mm,),
-    ))
-    story.append(Spacer(1, 6 * mm))
+    # --- Headline: loan limit on the left, score gauge on the right ---
+    headline = Table(
+        [[
+            _stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "LOAN LIMIT",
+                       76 * mm, value_font_size=14),
+            _score_gauge(score.credit_score, score.grade),
+        ]],
+        colWidths=(93 * mm, 93 * mm),
+    )
+    headline.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (0, 0), "LEFT"),
+                                   ("ALIGN", (1, 0), (1, 0), "RIGHT")]))
+    story.append(headline)
+    story.append(Spacer(1, 3 * mm))
 
     # --- Client / account ---
     story.append(_section("Client Information"))
@@ -317,7 +340,7 @@ def build_scorecard_pdf(statement, score) -> str:
         ("Statement period", statement.statement_period or "—"),
         ("Extraction method", statement.extraction_method or "—"),
     ]))
-    story.append(Spacer(1, 6 * mm))
+    story.append(Spacer(1, 3 * mm))
 
     # --- Monthly financial reconciliation ---
     summary = score.financial_summary or {}
@@ -333,7 +356,7 @@ def build_scorecard_pdf(statement, score) -> str:
                 f"<i>Contra entries excluded from the above: {contra_count} self-transfer(s), "
                 f"totaling {_money(contra_total)}.</i>", _styles["Footer"],
             ))
-        story.append(Spacer(1, 6 * mm))
+        story.append(Spacer(1, 3 * mm))
 
     # --- Score card data ---
     story.append(_section("Score Card Data"))
@@ -346,7 +369,7 @@ def build_scorecard_pdf(statement, score) -> str:
         ("Statement months", f"{score.month_count:.2f}" if score.month_count is not None else "—"),
         ("Needs review", "Yes" if statement.needs_review else "No"),
     ]))
-    story.append(Spacer(1, 6 * mm))
+    story.append(Spacer(1, 3 * mm))
 
     # --- Score reasons (transparency) ---
     story.append(_section("Score Reasons"))
@@ -368,10 +391,10 @@ def build_scorecard_pdf(statement, score) -> str:
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDAE8")),
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#B9B3DC")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
-    story += [rt, Spacer(1, 6 * mm)]
+    story += [rt, Spacer(1, 3 * mm)]
 
     # --- Flagged transactions (every flag ships with its reason) ---
     flagged_table = _flagged_transactions_table(statement)
@@ -391,7 +414,7 @@ def build_scorecard_pdf(statement, score) -> str:
         if n_flagged > 40:
             story.append(Paragraph(f"<i>Showing the first 40 of {n_flagged} flagged transactions — "
                                     "see the Excel export for the full list.</i>", _styles["Footer"]))
-        story.append(Spacer(1, 6 * mm))
+        story.append(Spacer(1, 3 * mm))
 
     # --- Authenticity / fraud check ---
     fraud = score.fraud_data or {}
@@ -402,7 +425,7 @@ def build_scorecard_pdf(statement, score) -> str:
         ("Signals", "; ".join(fraud.get("reasons", [])[:4]) or "No tampering signals detected."),
     ]))
 
-    story.append(Spacer(1, 8 * mm))
+    story.append(Spacer(1, 4 * mm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#DDDAE8")))
     story.append(Spacer(1, 2 * mm))
     story.append(Paragraph(
