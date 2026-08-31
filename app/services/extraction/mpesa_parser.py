@@ -160,7 +160,11 @@ def parse_mpesa(path: str, passcode: str | None = None) -> ExtractionResult:
                     )
 
     full_text = "\n".join(all_text_parts)
-    meta = _extract_meta(full_text)
+    # Meta (name/phone/period) comes from page 1's text only, not the whole
+    # document — a transaction line further down can embed a counterparty's
+    # phone number, and scanning everything risks reading that as the
+    # account holder's own contact (same class of bug fixed in bank_parser).
+    meta = _extract_meta(all_text_parts[0] if all_text_parts else "")
     result.account_holder = meta["holder"]
     result.phone_number = meta["phone"]
     result.statement_period = meta["period"]

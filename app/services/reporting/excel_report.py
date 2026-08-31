@@ -20,13 +20,20 @@ from openpyxl.utils import get_column_letter
 
 from app.config import settings
 
-_HEADER_FILL = PatternFill("solid", fgColor="3B2F8F")
-_HEADER_FONT = Font(color="FFFFFF", bold=True)
+# Font name only — Excel doesn't embed fonts the way a PDF must, so this is
+# safe to set even on a machine without Consolas installed; Excel silently
+# substitutes a fallback there instead of failing to render.
+_FONT_NAME = "Consolas"
+# Table column-header fill: amber with dark text, distinct from the purple
+# brand accent used for titles — kept readable at any zoom level.
+_HEADER_FILL = PatternFill("solid", fgColor="F2A93C")
+_HEADER_FONT = Font(name=_FONT_NAME, color="1F1400", bold=True)
 _TOTAL_FILL = PatternFill("solid", fgColor="E8E5F5")
 _FLAGGED_FILL = PatternFill("solid", fgColor="FDF3E7")
-_TITLE_FONT = Font(bold=True, size=14, color="3B2F8F")
-_SUBTITLE_FONT = Font(size=9, color="6B7280")
-_BOLD = Font(bold=True)
+_TITLE_FONT = Font(name=_FONT_NAME, bold=True, size=14, color="3B2F8F")
+_SUBTITLE_FONT = Font(name=_FONT_NAME, size=9, color="6B7280")
+_BOLD = Font(name=_FONT_NAME, bold=True)
+_BODY_FONT = Font(name=_FONT_NAME)
 
 
 def _style_header(ws, row: int, ncols: int) -> None:
@@ -35,6 +42,18 @@ def _style_header(ws, row: int, ncols: int) -> None:
         cell.fill = _HEADER_FILL
         cell.font = _HEADER_FONT
         cell.alignment = Alignment(horizontal="center")
+
+
+def _apply_default_font(ws) -> None:
+    """Consolas on every cell that doesn't already carry an explicit style."""
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.font is None or cell.font.name != _FONT_NAME:
+                existing = cell.font
+                cell.font = Font(
+                    name=_FONT_NAME, bold=existing.bold, italic=existing.italic,
+                    color=existing.color, size=existing.size or 11,
+                )
 
 
 def _autosize(ws, max_width: int = 60) -> None:
@@ -67,7 +86,9 @@ def build_financial_workbook(statement, score) -> str:
     row = _brand_header(ws, "Transparent credit scoring, explained.")
     ws.cell(row=row, column=1, value=f"Reference: {statement.reference_id}")
     row += 1
-    ws.cell(row=row, column=1, value=f"Client: {statement.account_holder or '—'}  |  National ID: {statement.national_id or '—'}")
+    ws.cell(row=row, column=1,
+            value=f"Client: {statement.account_holder or '—'}  |  National ID: {statement.national_id or '—'}  |  "
+                  f"Account: {statement.account_number or '—'}")
     row += 1
     ws.cell(row=row, column=1,
             value=f"Credit score: {score.credit_score}  |  Grade: {score.grade}  |  "
@@ -226,6 +247,9 @@ def build_financial_workbook(statement, score) -> str:
     tx.freeze_panes = "A2"
     tx.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{tx.max_row}"
     _autosize(tx)
+
+    for sheet in wb.worksheets:
+        _apply_default_font(sheet)
 
     wb.save(path)
     return path

@@ -11,12 +11,14 @@ reads scorecards can navigate this one without a legend.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.graphics.shapes import Circle, Drawing, Line, String, Wedge
 from reportlab.platypus import (
     HRFlowable,
     KeepTogether,
@@ -28,6 +30,10 @@ from reportlab.platypus import (
 )
 
 from app.config import settings
+from app.services.reporting.fonts import register_consolas
+
+_MONO = register_consolas()
+_MONO_BOLD = _MONO + "-Bold" if _MONO != "Courier" else "Courier-Bold"
 
 _ACCENT = colors.HexColor("#3B2F8F")
 _ACCENT_DARK = colors.HexColor("#241C5C")
@@ -38,15 +44,24 @@ _GOOD = colors.HexColor("#1E8E3E")
 _WARN = colors.HexColor("#B45309")
 _BAD = colors.HexColor("#C22222")
 
+# Table column-header backgrounds: amber with dark text, not the purple/white
+# combination used elsewhere — kept distinct from the brand accent so the
+# headings read clearly at small sizes.
+_HEADER_BG = colors.HexColor("#F2A93C")
+_HEADER_TEXT = colors.HexColor("#1F1400")
+
 _styles = getSampleStyleSheet()
-_styles.add(ParagraphStyle("Wordmark", parent=_styles["Title"], textColor=_ACCENT, fontSize=20, leading=24))
-_styles.add(ParagraphStyle("Tagline", parent=_styles["Normal"], textColor=_MUTED, fontSize=8, leading=10))
-_styles.add(ParagraphStyle("SectionHead", parent=_styles["Heading3"], textColor=_ACCENT_DARK, spaceBefore=2, spaceAfter=4))
-_styles.add(ParagraphStyle("Cell", parent=_styles["BodyText"], fontSize=8, leading=10))
-_styles.add(ParagraphStyle("CellSmall", parent=_styles["BodyText"], fontSize=6.5, leading=8))
-_styles.add(ParagraphStyle("StatValue", parent=_styles["Normal"], fontSize=24, leading=27, textColor=_INK, alignment=1))
-_styles.add(ParagraphStyle("StatLabel", parent=_styles["Normal"], fontSize=8, leading=10, textColor=_MUTED, alignment=1))
-_styles.add(ParagraphStyle("Footer", parent=_styles["Normal"], fontSize=7, leading=9, textColor=_MUTED))
+for _base in ("Normal", "BodyText", "Title", "Heading3"):
+    _styles[_base].fontName = _MONO
+_styles["Title"].leading = 22
+_styles.add(ParagraphStyle("Wordmark", parent=_styles["Title"], fontName=_MONO_BOLD, textColor=_ACCENT, fontSize=20, leading=24))
+_styles.add(ParagraphStyle("Tagline", parent=_styles["Normal"], fontName=_MONO, textColor=_MUTED, fontSize=8, leading=10))
+_styles.add(ParagraphStyle("SectionHead", parent=_styles["Heading3"], fontName=_MONO_BOLD, textColor=_ACCENT_DARK, spaceBefore=2, spaceAfter=4))
+_styles.add(ParagraphStyle("Cell", parent=_styles["BodyText"], fontName=_MONO, fontSize=8, leading=10))
+_styles.add(ParagraphStyle("CellSmall", parent=_styles["BodyText"], fontName=_MONO, fontSize=6.5, leading=8))
+_styles.add(ParagraphStyle("StatValue", parent=_styles["Normal"], fontName=_MONO_BOLD, fontSize=24, leading=27, textColor=_INK, alignment=1))
+_styles.add(ParagraphStyle("StatLabel", parent=_styles["Normal"], fontName=_MONO, fontSize=8, leading=10, textColor=_MUTED, alignment=1))
+_styles.add(ParagraphStyle("Footer", parent=_styles["Normal"], fontName=_MONO, fontSize=7, leading=9, textColor=_MUTED))
 
 
 def _status(statement, score) -> tuple[str, colors.Color]:
@@ -76,8 +91,7 @@ def _kv_table(rows: list[tuple[str, str]], col_widths=(58 * mm, 112 * mm)) -> Ta
 
 def _stat_card(value: str, label: str, width: float, accent: colors.Color = _ACCENT) -> Table:
     """A single stat card: value on top, label below — two independent rows,
-    so mixed font sizes never fight over one row's height (the cause of the
-    label text spilling out of its box in earlier versions of this report)."""
+    so mixed font sizes never fight over one row's height."""
     t = Table([[Paragraph(value, _styles["StatValue"])], [Paragraph(label, _styles["StatLabel"])]], colWidths=[width])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), _LIGHT),
@@ -102,6 +116,53 @@ def _money(v: float | None) -> str:
 
 def _money0(v: float | None) -> str:
     return f"KSh {v:,.0f}" if v is not None else "—"
+
+
+# --- Score gauge -------------------------------------------------------
+# A semicircular dial, banded by grade, with a needle over the client's own
+# score and the score/grade printed inside the dial's hollow center — the
+# score reads *from* the gauge rather than sitting in a plain box beside it.
+_GAUGE_MIN, _GAUGE_MAX = 300, 900
+_GAUGE_BANDS = (
+    (300, 480, colors.HexColor("#D9382B"), "POOR"),
+    (480, 600, colors.HexColor("#F0932B"), "FAIR"),
+    (600, 670, colors.HexColor("#F5C518"), "GOOD"),
+    (670, 800, colors.HexColor("#8BC34A"), "VERY GOOD"),
+    (800, 900, colors.HexColor("#2E8B3D"), "EXCELLENT"),
+)
+
+
+def _gauge_angle(score: float) -> float:
+    frac = max(0.0, min(1.0, (score - _GAUGE_MIN) / (_GAUGE_MAX - _GAUGE_MIN)))
+    return 180 - frac * 180  # 180° at the left (min), 0° at the right (max)
+
+
+def _score_gauge(score: int, grade: str) -> Drawing:
+    width, height = 170 * mm, 78 * mm
+    cx, cy = width / 2, 6 * mm
+    outer_r, inner_r = 58 * mm, 38 * mm
+    d = Drawing(width, height)
+
+    for lo, hi, color, label in _GAUGE_BANDS:
+        a0, a1 = _gauge_angle(hi), _gauge_angle(lo)  # higher score -> smaller angle (right side)
+        d.add(Wedge(cx, cy, outer_r, a0, a1, radius1=inner_r, fillColor=color, strokeColor=colors.white, strokeWidth=1.2))
+        mid = math.radians((a0 + a1) / 2)
+        lx, ly = cx + (outer_r + 6 * mm) * math.cos(mid), cy + (outer_r + 6 * mm) * math.sin(mid)
+        d.add(String(lx, ly, label, fontSize=6, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
+
+    # Needle, clamped into [min, max] even if a rule pushed the score to the
+    # engine's hard floor/ceiling.
+    clamped = max(_GAUGE_MIN, min(_GAUGE_MAX, score))
+    ang = math.radians(_gauge_angle(clamped))
+    needle_len = outer_r * 0.9
+    d.add(Line(cx, cy, cx + needle_len * math.cos(ang), cy + needle_len * math.sin(ang),
+               strokeColor=colors.HexColor("#1F2430"), strokeWidth=2.6))
+    d.add(Circle(cx, cy, 3 * mm, fillColor=_INK, strokeColor=None))
+
+    # Score + grade readout, inside the dial's hollow center.
+    d.add(String(cx, cy + 16 * mm, str(score), fontSize=30, fillColor=_INK, textAnchor="middle", fontName=_MONO_BOLD))
+    d.add(String(cx, cy + 7 * mm, f"GRADE {grade}", fontSize=10, fillColor=_MUTED, textAnchor="middle", fontName=_MONO_BOLD))
+    return d
 
 
 def _monthly_table(monthly: dict) -> Table:
@@ -150,8 +211,8 @@ def _monthly_table(monthly: dict) -> Table:
     col_widths = [14 * mm] + [16 * mm] * 9 + [14 * mm]
     t = Table(rows, colWidths=col_widths, repeatRows=1)
     style = [
-        ("BACKGROUND", (0, 0), (-1, 0), _ACCENT),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
+        ("TEXTCOLOR", (0, 0), (-1, 0), _HEADER_TEXT),
         ("ROWBACKGROUNDS", (0, 1), (-1, n_data_rows), [colors.white, _LIGHT]),
         ("BACKGROUND", (0, n_data_rows + 1), (-1, -1), colors.HexColor("#E8E5F5")),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDAE8")),
@@ -186,8 +247,8 @@ def _flagged_transactions_table(statement) -> Table | None:
         ])
     t = Table(rows, colWidths=(20 * mm, 55 * mm, 20 * mm, 12 * mm, 55 * mm), repeatRows=1)
     t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), _ACCENT),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
+        ("TEXTCOLOR", (0, 0), (-1, 0), _HEADER_TEXT),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FDF3E7")]),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E8C48A")),
@@ -234,16 +295,13 @@ def build_scorecard_pdf(statement, score) -> str:
     ]))
     story += [status_bar, Spacer(1, 5 * mm)]
 
-    # --- Headline stats: three independent cards (fixes the earlier
-    # value/label overlap, which came from mixing font sizes in one
-    # Paragraph and letting the table auto-size around it) ---
+    # --- Score gauge (score + grade read directly off the dial) plus the
+    # one remaining stat that doesn't fit inside it ---
+    story.append(_score_gauge(score.credit_score, score.grade))
+    story.append(Spacer(1, 2 * mm))
     story.append(Table(
-        [[
-            _stat_card(str(score.credit_score), "CREDIT SCORE", 55 * mm),
-            _stat_card(score.grade, "GRADE", 45 * mm),
-            _stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "LOAN LIMIT", 70 * mm),
-        ]],
-        colWidths=(58 * mm, 48 * mm, 74 * mm),
+        [[_stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "LOAN LIMIT", 90 * mm)]],
+        colWidths=(180 * mm,),
     ))
     story.append(Spacer(1, 6 * mm))
 
@@ -253,6 +311,7 @@ def build_scorecard_pdf(statement, score) -> str:
     story.append(_kv_table([
         ("Client name", statement.account_holder or "—"),
         ("National ID", statement.national_id or "—"),
+        ("Account number", statement.account_number or "—"),
         ("Phone", statement.phone_number or "—"),
         ("Product", str(product).replace("_", " ").title()),
         ("Statement period", statement.statement_period or "—"),
@@ -303,8 +362,8 @@ def build_scorecard_pdf(statement, score) -> str:
         ])
     rt = Table(reason_rows, colWidths=(32 * mm, 16 * mm, 112 * mm), repeatRows=1)
     rt.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), _ACCENT),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
+        ("TEXTCOLOR", (0, 0), (-1, 0), _HEADER_TEXT),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _LIGHT]),
         ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDAE8")),
         ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#B9B3DC")),
