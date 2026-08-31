@@ -14,13 +14,19 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "Credit Scoring API"
+    app_name: str = "Credit Yetu"
     env: str = "development"
     debug: bool = True
     api_v1_prefix: str = "/api/v1"
 
     # Database
     database_url: str = "postgresql+psycopg2://credit:credit@localhost:5432/credit_scoring"
+    # Conservative defaults: many managed Postgres tiers (Aiven's smaller plans
+    # included) cap total connections around 20-25 and that budget is often
+    # shared with other apps/tools (DBeaver, other schemas). pool_size +
+    # max_overflow is the hard ceiling this app alone can open.
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
 
     # Security
     secret_key: str = "dev-insecure-secret-change-me"

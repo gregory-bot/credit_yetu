@@ -19,6 +19,7 @@ from app.database import SessionLocal
 from app.models import Score, Statement, Transaction
 from app.services.classification import ClientIdentity, classify
 from app.services.extraction import extract
+from app.services.extraction.ordering import ensure_chronological
 from app.services.fraud import analyze as fraud_analyze
 from app.services.reporting import build_financial_workbook, build_scorecard_pdf
 from app.services.scoring import score_statement
@@ -69,6 +70,11 @@ def process_statement(
                 _fire_callback(stmt.callback_url, {"status": 422, "reference_id": str(stmt.reference_id),
                                                    "message": "No transactions extracted", "data": None})
             return
+
+        # Balance reconciliation (fraud) and the monthly balance trend
+        # (summary) both assume oldest-first order — normalize it here, once,
+        # regardless of which direction the source statement listed rows in.
+        result.transactions = ensure_chronological(result.transactions)
 
         # 2. Classify (needs client identity for contra detection)
         client = ClientIdentity(name=result.account_holder, phone=result.phone_number)

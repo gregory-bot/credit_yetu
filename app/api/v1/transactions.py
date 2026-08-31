@@ -16,6 +16,7 @@ from app.models import Organization
 from app.schemas import TransactionsScoreRequest
 from app.services.classification import ClientIdentity, classify
 from app.services.extraction.models import ExtractedTransaction
+from app.services.extraction.ordering import ensure_chronological
 from app.services.extraction.patterns import parse_datetime
 from app.services.ml.shadow import shadow_predict
 from app.services.scoring import score_statement
@@ -46,6 +47,9 @@ def score_transactions(
         for t in payload.transactions
     ]
 
+    # Callers may submit rows in either order; the monthly balance trend in
+    # build_summary assumes oldest-first (see services/extraction/ordering.py).
+    txns = ensure_chronological(txns)
     classify(txns, ClientIdentity(name=payload.account_holder, phone=payload.phone))
     summary = build_summary(txns)
     result = score_statement(summary, fraud_data=None, product=payload.product, crb_obligation=payload.crb_obligation)

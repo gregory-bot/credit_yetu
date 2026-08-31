@@ -7,21 +7,27 @@ Each transaction receives:
 
 Rules (all transparent and individually auditable):
 
-* contra  — a transfer between the client's *own* accounts. Detected only when
+* contra   — a transfer between the client's *own* accounts. Detected only when
   the counterparty name/phone matches the client's own name/phone. Conservative
   by design: a false contra would wrongly cancel real income.
-* loan    — word-boundary match against the curated loan keyword list.
-* outlier — a one-off large credit, flagged with an IQR threshold computed over
-  the client's *own* recurring credit amounts (not a raw ceiling), so a genuine
-  salary is never flagged merely for being large.
+* loan     — word-boundary match against the curated loan keyword list.
+* outlier  — a one-off large credit *or* debit, flagged with an IQR threshold
+  computed independently over the client's own recurring credit/debit amounts
+  (not a raw ceiling), so a genuine salary or a normal-sized bill is never
+  flagged merely for being large.
 * category — first matching bucket from the curated category keywords.
+
+Every transaction that ends up ``is_flagged`` always carries a human-readable
+``flag_reason`` — contra/outlier/distress reasons stack (joined, not
+overwritten) when more than one applies to the same row, so nothing is ever
+flagged without an auditable explanation of why.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
-from app.services.classification.keywords import CATEGORY_KEYWORDS, LOAN_KEYWORDS
+from app.services.classification.keywords import CATEGORY_KEYWORDS, DISTRESS_KEYWORDS, LOAN_KEYWORDS
 from app.services.extraction.models import ExtractedTransaction
 
 
@@ -81,16 +87,27 @@ def classify(transactions: list[ExtractedTransaction], client: ClientIdentity) -
     client_tokens = _name_tokens(client.name)
     client_phone_tail = (client.phone or "")[-6:]
 
-    # Build the IQR fence over recurring credit amounts.
-    credit_values = [t.paid_in for t in transactions if t.paid_in > 0]
-    fence = _iqr_upper_fence(credit_values)
+    # Independent IQR fences over recurring credit / debit amounts.
+    #
+    # Debits mix two very different populations on a real statement: tiny
+    # recurring fee/duty lines (bank/M-Pesa charges, excise duty — almost
+    # always under KES 100) and substantive payments. Feeding both into one
+    # IQR computation lets the fee cluster drag the fence down so far that
+    # ordinary transfers get flagged as "one-off outliers" (confirmed on a
+    # real statement: median debit KES 47, fence collapsed to ~8,600,
+    # flagging 22 of 79 substantive transfers). Excluding the fee-sized tail
+    # before computing the fence keeps it meaningful for genuinely
+    # exceptional debits only.
+    _FEE_FLOOR = 100.0
+    credit_fence = _iqr_upper_fence([t.paid_in for t in transactions if t.paid_in > 0])
+    debit_fence = _iqr_upper_fence([t.withdrawn for t in transactions if t.withdrawn >= _FEE_FLOOR])
 
     for t in transactions:
         desc = t.description or ""
         tags = t.raw.setdefault("tags", {})
 
         label = "normal"
-        flag_reason = None
+        reasons: list[str] = []
 
         # --- contra ---
         cp_tokens = _name_tokens(t.counterparty or desc)
@@ -98,7 +115,7 @@ def classify(transactions: list[ExtractedTransaction], client: ClientIdentity) -
         phone_overlap = bool(client_phone_tail) and client_phone_tail in desc
         if name_overlap or phone_overlap:
             label = "contra"
-            flag_reason = "Transfer between client's own accounts (self-transfer)."
+            reasons.append("Transfer between client's own accounts (self-transfer).")
 
         # --- loan ---
         loan_hit = _word_boundary_hit(desc, LOAN_KEYWORDS)
@@ -106,19 +123,32 @@ def classify(transactions: list[ExtractedTransaction], client: ClientIdentity) -
             label = "loan"
             tags["loan_keyword"] = loan_hit
 
-        # --- outlier (only for credits, and only if not already contra/loan) ---
-        if label == "normal" and fence is not None and t.paid_in > fence:
+        # --- outlier (credit or debit side; only if not already contra/loan) ---
+        if label == "normal" and credit_fence is not None and t.paid_in > credit_fence:
             label = "outlier"
-            flag_reason = (
+            reasons.append(
                 f"One-off large credit {t.paid_in:,.0f} exceeds IQR fence "
-                f"{fence:,.0f} over recurring credits."
+                f"{credit_fence:,.0f} over recurring credits."
+            )
+        elif label == "normal" and debit_fence is not None and t.withdrawn > debit_fence:
+            label = "outlier"
+            reasons.append(
+                f"One-off large debit {t.withdrawn:,.0f} exceeds IQR fence "
+                f"{debit_fence:,.0f} over recurring debits."
             )
 
+        # --- distress signal (independent of label — can stack with any of the above) ---
+        distress_hit = _word_boundary_hit(desc, DISTRESS_KEYWORDS)
+        if distress_hit:
+            reasons.append(f"Distress signal: description matches '{distress_hit}'.")
+
         category = _categorize(desc)
+        is_flagged = label in ("contra", "outlier") or bool(distress_hit)
+        flag_reason = "; ".join(reasons)[:255] if reasons else None
 
         tags["label"] = label
         tags["category"] = category
         t.raw["label"] = label
         t.raw["category"] = category
-        t.raw["is_flagged"] = label in ("contra", "outlier")
+        t.raw["is_flagged"] = is_flagged
         t.raw["flag_reason"] = flag_reason

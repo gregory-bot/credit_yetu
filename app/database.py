@@ -11,8 +11,9 @@ from app.config import settings
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,   # transparently recover dropped connections
-    pool_size=10,
-    max_overflow=20,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_recycle=1800,    # recycle before a managed provider's idle-connection timeout drops it
     future=True,
 )
 

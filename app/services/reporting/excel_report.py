@@ -1,13 +1,18 @@
-"""Two-sheet financial-summary Excel export.
+"""Three-sheet financial-summary Excel export.
 
-Sheet 1 (Summary): headline figures, category totals and monthly trends.
-Sheet 2 (Transactions): every extracted transaction with its classification.
+Sheet 1 (Summary): headline figures, category totals and monthly cashflow trend.
+Sheet 2 (Monthly Detail): the credit-team reconciliation table — Credits/Loans/
+Outliers/Net per direction, plus the balance range, one row per month.
+Sheet 3 (Transactions): every extracted transaction with its classification;
+flagged rows are highlighted and always carry a Flag reason.
 
 This is the reconciliation artefact the credit team asked for — and a usable
 fallback when the scorecard PDF is slow or fails, because it's generated
 independently from the same persisted data.
 """
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -17,7 +22,11 @@ from app.config import settings
 
 _HEADER_FILL = PatternFill("solid", fgColor="3B2F8F")
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
-_TITLE_FONT = Font(bold=True, size=13)
+_TOTAL_FILL = PatternFill("solid", fgColor="E8E5F5")
+_FLAGGED_FILL = PatternFill("solid", fgColor="FDF3E7")
+_TITLE_FONT = Font(bold=True, size=14, color="3B2F8F")
+_SUBTITLE_FONT = Font(size=9, color="6B7280")
+_BOLD = Font(bold=True)
 
 
 def _style_header(ws, row: int, ncols: int) -> None:
@@ -34,6 +43,17 @@ def _autosize(ws, max_width: int = 60) -> None:
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(length + 2, max_width)
 
 
+def _brand_header(ws, subtitle: str) -> int:
+    """Writes the brand wordmark + subtitle, returns the next free row."""
+    ws["A1"] = settings.app_name
+    ws["A1"].font = _TITLE_FONT
+    ws["A2"] = subtitle
+    ws["A2"].font = _SUBTITLE_FONT
+    ws["A3"] = f"Generated {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}"
+    ws["A3"].font = _SUBTITLE_FONT
+    return 5
+
+
 def build_financial_workbook(statement, score) -> str:
     summary = score.financial_summary or {}
     out_dir = settings.storage_path / "reports"
@@ -44,13 +64,17 @@ def build_financial_workbook(statement, score) -> str:
     # ---- Summary sheet ----
     ws = wb.active
     ws.title = "Summary"
-    ws["A1"] = "Financial Summary"
-    ws["A1"].font = _TITLE_FONT
-    ws["A2"] = f"Reference: {statement.reference_id}"
-    ws["A3"] = f"Account holder: {statement.account_holder or '—'}"
-    ws["A4"] = f"Credit score: {score.credit_score}  |  Grade: {score.grade}  |  Limit: {score.limit_low:,.0f}–{score.limit_high:,.0f}"
+    row = _brand_header(ws, "Transparent credit scoring, explained.")
+    ws.cell(row=row, column=1, value=f"Reference: {statement.reference_id}")
+    row += 1
+    ws.cell(row=row, column=1, value=f"Client: {statement.account_holder or '—'}  |  National ID: {statement.national_id or '—'}")
+    row += 1
+    ws.cell(row=row, column=1,
+            value=f"Credit score: {score.credit_score}  |  Grade: {score.grade}  |  "
+                  f"Limit: {score.limit_low:,.0f}–{score.limit_high:,.0f}  |  "
+                  f"Needs review: {'Yes' if statement.needs_review else 'No'}")
+    row += 2
 
-    row = 6
     ws.cell(row=row, column=1, value="Metric")
     ws.cell(row=row, column=2, value="Value")
     _style_header(ws, row, 2)
@@ -66,6 +90,7 @@ def build_financial_workbook(statement, score) -> str:
     behaviour = summary.get("behaviour", {})
     lending = summary.get("lending", {})
     period = summary.get("period", {})
+    fraud = score.fraud_data or {}
     for label, value in [
         ("Total received", totals.get("total_received", 0)),
         ("Total sent", totals.get("total_sent", 0)),
@@ -80,9 +105,15 @@ def build_financial_workbook(statement, score) -> str:
         ("Salary in", behaviour.get("salary_in", 0)),
         ("P2P received", behaviour.get("p2p_received", 0)),
         ("P2P sent", behaviour.get("p2p_sent", 0)),
+        ("Contra (self-transfer) total", behaviour.get("contra_total", 0)),
+        ("Contra (self-transfer) count", behaviour.get("contra_count", 0)),
+        ("Outlier credit total", behaviour.get("outlier_credit_total", 0)),
+        ("Outlier debit total", behaviour.get("outlier_debit_total", 0)),
         ("Expenses-to-income", behaviour.get("expenses_to_income", 0)),
         ("Statement months", period.get("statement_months", 0)),
         ("Active months", period.get("active_months", 0)),
+        ("Fraud risk score", fraud.get("risk_score", 0)),
+        ("Fraud risk level", fraud.get("risk_level", "—")),
     ]:
         put(label, value)
 
@@ -101,7 +132,9 @@ def build_financial_workbook(statement, score) -> str:
         ws.cell(row=row, column=4, value=vals.get("count", 0))
         row += 1
 
-    # Monthly trends block.
+    # Monthly cashflow trend block (headline received/sent/balance only —
+    # see the "Monthly Detail" sheet for the full Credits/Loans/Outliers/Net
+    # reconciliation table).
     row += 1
     ws.cell(row=row, column=1, value="Month")
     ws.cell(row=row, column=2, value="Received")
@@ -120,11 +153,59 @@ def build_financial_workbook(statement, score) -> str:
 
     _autosize(ws)
 
+    # ---- Monthly Detail sheet (the credit-team reconciliation table) ----
+    monthly = summary.get("monthly_detail") or {}
+    if monthly.get("rows"):
+        md = wb.create_sheet("Monthly Detail")
+        row = _brand_header(md, "Monthly reconciliation — Credits / Loans / Outliers / Net, per direction")
+        headers = ["Month", "Credits (Cr)", "Loans (Cr)", "Outliers (Cr)", "Net (CR)",
+                   "Debits (Dr)", "Loans (Dr)", "Outliers (Dr)", "Net (DR)", "Highest Bal", "Lowest Bal"]
+        header_row = row
+        for c, h in enumerate(headers, start=1):
+            md.cell(row=header_row, column=c, value=h)
+        _style_header(md, header_row, len(headers))
+
+        r = header_row + 1
+        for mr in monthly["rows"]:
+            md.cell(row=r, column=1, value=mr["month"])
+            md.cell(row=r, column=2, value=mr["credits"])
+            md.cell(row=r, column=3, value=mr["loan_credits"])
+            md.cell(row=r, column=4, value=mr["outlier_credits"])
+            md.cell(row=r, column=5, value=mr["net_credit"])
+            md.cell(row=r, column=6, value=mr["debits"])
+            md.cell(row=r, column=7, value=mr["loan_debits"])
+            md.cell(row=r, column=8, value=mr["outlier_debits"])
+            md.cell(row=r, column=9, value=mr["net_debit"])
+            md.cell(row=r, column=10, value=mr["highest_balance"])
+            md.cell(row=r, column=11, value=mr["lowest_balance"])
+            r += 1
+
+        for label, key_row in (("Total", monthly.get("totals", {})), ("Average", monthly.get("averages", {}))):
+            md.cell(row=r, column=1, value=label).font = _BOLD
+            for c, key in enumerate(("credits", "loan_credits", "outlier_credits", "net_credit",
+                                      "debits", "loan_debits", "outlier_debits", "net_debit",
+                                      "highest_balance", "lowest_balance"), start=2):
+                cell = md.cell(row=r, column=c, value=key_row.get(key))
+                cell.font = _BOLD
+                cell.fill = _TOTAL_FILL
+            r += 1
+
+        contra_total = summary.get("behaviour", {}).get("contra_total", 0)
+        contra_count = summary.get("behaviour", {}).get("contra_count", 0)
+        if contra_count:
+            r += 1
+            md.cell(row=r, column=1,
+                    value=f"Contra entries excluded from the above: {contra_count} self-transfer(s), "
+                          f"totaling KSh {contra_total:,.2f}.")
+        _autosize(md)
+
     # ---- Transactions sheet ----
     tx = wb.create_sheet("Transactions")
-    headers = ["Date", "Reference", "Description", "Paid In", "Withdrawn", "Balance", "Label", "Category", "Flag reason"]
+    headers = ["Date", "Reference", "Description", "Paid In", "Withdrawn", "Balance",
+               "Label", "Category", "Flagged", "Flag reason"]
     tx.append(headers)
     _style_header(tx, 1, len(headers))
+    n_flagged = 0
     for t in statement.transactions:
         tx.append([
             t.transaction_datetime.isoformat() if t.transaction_datetime else "",
@@ -135,9 +216,15 @@ def build_financial_workbook(statement, score) -> str:
             t.balance,
             t.label,
             t.category or "",
+            "Yes" if t.is_flagged else "No",
             t.flag_reason or "",
         ])
+        if t.is_flagged:
+            n_flagged += 1
+            for c in range(1, len(headers) + 1):
+                tx.cell(row=tx.max_row, column=c).fill = _FLAGGED_FILL
     tx.freeze_panes = "A2"
+    tx.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{tx.max_row}"
     _autosize(tx)
 
     wb.save(path)

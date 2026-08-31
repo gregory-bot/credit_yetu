@@ -59,12 +59,23 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
     loan_received = loan_repaid = 0.0
     p2p_received = p2p_sent = 0.0
     contra_total = 0.0
-    outlier_total = 0.0
+    contra_count = 0
+    outlier_credit_total = 0.0
+    outlier_debit_total = 0.0
 
     # --- monthly trends ---
     m_received: dict[str, float] = defaultdict(float)
     m_sent: dict[str, float] = defaultdict(float)
     m_balance: dict[str, float] = {}  # last balance seen in a month
+
+    # --- monthly detail (mirrors the credit-team's reconciliation table:
+    # Credits/Loans/Outliers/Net per direction, plus the balance range) ---
+    _blank_month = lambda: {  # noqa: E731
+        "credits": 0.0, "loan_credits": 0.0, "outlier_credits": 0.0,
+        "debits": 0.0, "loan_debits": 0.0, "outlier_debits": 0.0,
+        "highest_balance": None, "lowest_balance": None,
+    }
+    monthly_detail: dict[str, dict] = defaultdict(_blank_month)
 
     for t in transactions:
         label = t.raw.get("label", "normal")
@@ -84,8 +95,10 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
             loan_repaid += t.withdrawn
         elif label == "contra":
             contra_total += t.paid_in + t.withdrawn
+            contra_count += 1
         elif label == "outlier":
-            outlier_total += t.paid_in
+            outlier_credit_total += t.paid_in
+            outlier_debit_total += t.withdrawn
 
         if category == "transfer":
             p2p_received += t.paid_in
@@ -97,6 +110,19 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
             m_sent[mk] += t.withdrawn
             if t.balance is not None:
                 m_balance[mk] = t.balance
+
+            md = monthly_detail[mk]
+            md["credits"] += t.paid_in
+            md["debits"] += t.withdrawn
+            if label == "loan":
+                md["loan_credits"] += t.paid_in
+                md["loan_debits"] += t.withdrawn
+            elif label == "outlier":
+                md["outlier_credits"] += t.paid_in
+                md["outlier_debits"] += t.withdrawn
+            if t.balance is not None:
+                md["highest_balance"] = t.balance if md["highest_balance"] is None else max(md["highest_balance"], t.balance)
+                md["lowest_balance"] = t.balance if md["lowest_balance"] is None else min(md["lowest_balance"], t.balance)
 
     categories = {
         key: {
@@ -112,6 +138,47 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
     net = total_received - total_sent
     credits = [t.paid_in for t in transactions if t.paid_in > 0]
     debits = [t.withdrawn for t in transactions if t.withdrawn > 0]
+
+    # Finalize monthly detail: net = gross minus loans minus outliers (so
+    # "Net" reflects qualifying, non-loan, non-one-off cashflow per month),
+    # rounded and ordered chronologically.
+    monthly_rows = []
+    for mk in sorted(monthly_detail):
+        md = monthly_detail[mk]
+        net_credit = md["credits"] - md["loan_credits"] - md["outlier_credits"]
+        net_debit = md["debits"] - md["loan_debits"] - md["outlier_debits"]
+        monthly_rows.append({
+            "month": mk,
+            "credits": round(md["credits"], 2),
+            "loan_credits": round(md["loan_credits"], 2),
+            "outlier_credits": round(md["outlier_credits"], 2),
+            "net_credit": round(net_credit, 2),
+            "debits": round(md["debits"], 2),
+            "loan_debits": round(md["loan_debits"], 2),
+            "outlier_debits": round(md["outlier_debits"], 2),
+            "net_debit": round(net_debit, 2),
+            "highest_balance": round(md["highest_balance"], 2) if md["highest_balance"] is not None else None,
+            "lowest_balance": round(md["lowest_balance"], 2) if md["lowest_balance"] is not None else None,
+        })
+    all_highs = [r["highest_balance"] for r in monthly_rows if r["highest_balance"] is not None]
+    all_lows = [r["lowest_balance"] for r in monthly_rows if r["lowest_balance"] is not None]
+    n_months = len(monthly_rows) or 1
+    monthly_totals = {
+        "credits": round(sum(r["credits"] for r in monthly_rows), 2),
+        "loan_credits": round(sum(r["loan_credits"] for r in monthly_rows), 2),
+        "outlier_credits": round(sum(r["outlier_credits"] for r in monthly_rows), 2),
+        "net_credit": round(sum(r["net_credit"] for r in monthly_rows), 2),
+        "debits": round(sum(r["debits"] for r in monthly_rows), 2),
+        "loan_debits": round(sum(r["loan_debits"] for r in monthly_rows), 2),
+        "outlier_debits": round(sum(r["outlier_debits"] for r in monthly_rows), 2),
+        "net_debit": round(sum(r["net_debit"] for r in monthly_rows), 2),
+        "highest_balance": max(all_highs) if all_highs else None,
+        "lowest_balance": min(all_lows) if all_lows else None,
+    }
+    monthly_averages = {k: (round(v / n_months, 2) if isinstance(v, (int, float)) else v)
+                         for k, v in monthly_totals.items() if k not in ("highest_balance", "lowest_balance")}
+    monthly_averages["highest_balance"] = monthly_totals["highest_balance"]
+    monthly_averages["lowest_balance"] = monthly_totals["lowest_balance"]
 
     return {
         "totals": {
@@ -142,7 +209,9 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
             "p2p_received": round(p2p_received, 2),
             "p2p_sent": round(p2p_sent, 2),
             "contra_total": round(contra_total, 2),
-            "outlier_credit_total": round(outlier_total, 2),
+            "contra_count": contra_count,
+            "outlier_credit_total": round(outlier_credit_total, 2),
+            "outlier_debit_total": round(outlier_debit_total, 2),
             "betting_to_income": _safe_div(cat_out.get("betting", 0.0), total_received),
             "expenses_to_income": _safe_div(total_sent, total_received),
         },
@@ -151,6 +220,11 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
             "received": {k: round(v, 2) for k, v in sorted(m_received.items())},
             "sent": {k: round(v, 2) for k, v in sorted(m_sent.items())},
             "balance": {k: round(v, 2) for k, v in sorted(m_balance.items())},
+        },
+        "monthly_detail": {
+            "rows": monthly_rows,
+            "totals": monthly_totals,
+            "averages": monthly_averages,
         },
         "period": {
             "first_transaction_date": first.isoformat() if first else None,

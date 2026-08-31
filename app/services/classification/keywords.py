@@ -32,7 +32,13 @@ CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "savings": ("mshwari lock", "lock savings", "goal savings", "deposit"),
 }
 
-# Non-performing / distress signals used by the scoring engine.
+# Non-performing / distress signals used to flag individual transactions.
+# Deliberately excludes generic "charge"/"fee" — every statement has routine
+# service-fee line items (e.g. "IBANKING - MPESA CHARGE") that are not a
+# distress signal, and including it flagged ~40% of a real test statement on
+# nothing but its own transaction fees. These are specific enough that a
+# false-positive rate that high isn't expected.
 DISTRESS_KEYWORDS: tuple[str, ...] = (
-    "reversal", "charge", "penalty", "bounced", "insufficient", "declined", "failed",
+    "bounced", "insufficient funds", "declined", "failed", "dishonoured", "dishonored",
+    "returned cheque", "unpaid cheque", "reversal", "reversed", "penalty",
 )
