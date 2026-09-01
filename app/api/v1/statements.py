@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_org
 from app.config import settings
@@ -16,7 +16,6 @@ from app.core.errors import AppError, NotFound
 from app.core.responses import accepted, ok
 from app.database import get_db
 from app.models import Customer, Organization, Statement
-from app.services.ml.shadow import shadow_predict
 from app.services.pipeline import process_statement
 
 router = APIRouter(prefix="/statements", tags=["statements"])
@@ -136,12 +135,26 @@ def list_statements(
     ])
 
 
-def _statement_or_404(reference_id: str, org: Organization, db: Session) -> Statement:
+def _statement_or_404(
+    reference_id: str,
+    org: Organization,
+    db: Session,
+    *,
+    eager: tuple[str, ...] = (),
+) -> Statement:
     try:
         ref = uuid.UUID(reference_id)
     except ValueError as exc:
         raise NotFound("Invalid reference_id.") from exc
-    stmt = db.scalar(select(Statement).where(Statement.reference_id == ref, Statement.organization_id == org.id))
+    query = select(Statement).where(Statement.reference_id == ref, Statement.organization_id == org.id)
+    # Fuse the relationship the caller needs into the same round trip via a
+    # JOIN, instead of paying a separate one for it on lazy access — each
+    # round trip is felt directly against a remote database.
+    for name in eager:
+        query = query.options(joinedload(getattr(Statement, name)))
+    # .unique() is required whenever a joinedload spans a to-many relationship
+    # (transactions) — harmless here otherwise (score is one-to-one).
+    stmt = db.execute(query).unique().scalar_one_or_none()
     if not stmt:
         raise NotFound("Statement not found.")
     return stmt
@@ -149,7 +162,7 @@ def _statement_or_404(reference_id: str, org: Organization, db: Session) -> Stat
 
 @router.get("/{reference_id}")
 def statement_status(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("score", "transactions"))
     return ok({
         "reference_id": str(stmt.reference_id),
         "status": stmt.status,
@@ -165,11 +178,10 @@ def statement_status(reference_id: str, org: Organization = Depends(get_current_
 
 @router.get("/{reference_id}/score")
 def statement_score(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("score",))
     if stmt.score is None:
         return ok({"reference_id": str(stmt.reference_id), "status": stmt.status}, message="Scoring not complete")
     s = stmt.score
-    ml_shadow = shadow_predict(db, s.financial_summary, s.fraud_data, s.avg_monthly_income or 0.0)
     return ok({
         "reference_id": str(stmt.reference_id),
         "score_data": {
@@ -185,14 +197,12 @@ def statement_score(reference_id: str, org: Organization = Depends(get_current_o
         "score_breakdown": s.score_breakdown,
         "fraud_data": s.fraud_data,
         "needs_review": stmt.needs_review,
-        # Non-authoritative — see app/services/ml/shadow.py. credit_score/grade above are final.
-        "ml_shadow": ml_shadow,
     })
 
 
 @router.get("/{reference_id}/summary")
 def statement_summary(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("score",))
     if stmt.score is None:
         raise NotFound("Financial summary not available yet.")
     return ok({"reference_id": str(stmt.reference_id), "financial_summary": stmt.score.financial_summary})
@@ -200,7 +210,7 @@ def statement_summary(reference_id: str, org: Organization = Depends(get_current
 
 @router.get("/{reference_id}/transactions")
 def statement_transactions(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("transactions",))
     return ok([
         {
             "date": t.transaction_datetime.isoformat() if t.transaction_datetime else None,
@@ -220,7 +230,7 @@ def statement_transactions(reference_id: str, org: Organization = Depends(get_cu
 
 @router.get("/{reference_id}/report/pdf")
 def download_pdf(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("score",))
     if not stmt.score or not stmt.score.pdf_path or not Path(stmt.score.pdf_path).exists():
         raise NotFound("PDF report not available.")
     return FileResponse(stmt.score.pdf_path, media_type="application/pdf",
@@ -229,7 +239,7 @@ def download_pdf(reference_id: str, org: Organization = Depends(get_current_org)
 
 @router.get("/{reference_id}/report/excel")
 def download_excel(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
-    stmt = _statement_or_404(reference_id, org, db)
+    stmt = _statement_or_404(reference_id, org, db, eager=("score",))
     if not stmt.score or not stmt.score.excel_path or not Path(stmt.score.excel_path).exists():
         raise NotFound("Excel report not available.")
     return FileResponse(

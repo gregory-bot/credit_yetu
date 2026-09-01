@@ -28,7 +28,7 @@ import { useRequireAuth } from "@/lib/auth";
 export const Route = createFileRoute("/customers")({
   head: () => ({
     meta: [
-      { title: "Customers — Credit Yetu" },
+      { title: "Customers · Credit Yetu" },
       {
         name: "description",
         content: "Every individual and company customer your team has registered.",

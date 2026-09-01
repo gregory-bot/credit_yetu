@@ -25,13 +25,13 @@ import { useRequireAuth } from "@/lib/auth";
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "Dashboard — Credit Yetu" },
+      { title: "Dashboard · Credit Yetu" },
       {
         name: "description",
         content:
           "Portfolio overview: customers scored, statements processed, average credit score and grade distribution.",
       },
-      { property: "og:title", content: "Dashboard — Credit Yetu" },
+      { property: "og:title", content: "Dashboard · Credit Yetu" },
       { property: "og:description", content: "Your lending portfolio at a glance." },
     ],
   }),

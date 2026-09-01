@@ -17,6 +17,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as VerifyRouteImport } from './routes/verify'
+import { Route as StatementsIndexRouteImport } from './routes/statements.index'
 import { Route as StatementsReferenceIdRouteImport } from './routes/statements.$referenceId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -59,6 +60,11 @@ const VerifyRoute = VerifyRouteImport.update({
   path: '/verify',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatementsIndexRoute = StatementsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => StatementsRoute,
+} as any)
 const StatementsReferenceIdRoute = StatementsReferenceIdRouteImport.update({
   id: '/$referenceId',
   path: '/$referenceId',
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/statements': typeof StatementsRouteWithChildren
   '/verify': typeof VerifyRoute
   '/statements/$referenceId': typeof StatementsReferenceIdRoute
+  '/statements/': typeof StatementsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -83,9 +90,9 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/reset-password': typeof ResetPasswordRoute
   '/settings': typeof SettingsRoute
-  '/statements': typeof StatementsRouteWithChildren
   '/verify': typeof VerifyRoute
   '/statements/$referenceId': typeof StatementsReferenceIdRoute
+  '/statements': typeof StatementsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -98,6 +105,7 @@ export interface FileRoutesById {
   '/statements': typeof StatementsRouteWithChildren
   '/verify': typeof VerifyRoute
   '/statements/$referenceId': typeof StatementsReferenceIdRoute
+  '/statements/': typeof StatementsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -111,6 +119,7 @@ export interface FileRouteTypes {
     | '/statements'
     | '/verify'
     | '/statements/$referenceId'
+    | '/statements/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -119,9 +128,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/reset-password'
     | '/settings'
-    | '/statements'
     | '/verify'
     | '/statements/$referenceId'
+    | '/statements'
   id:
     | '__root__'
     | '/'
@@ -133,6 +142,7 @@ export interface FileRouteTypes {
     | '/statements'
     | '/verify'
     | '/statements/$referenceId'
+    | '/statements/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -204,6 +214,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/statements/': {
+      id: '/statements/'
+      path: '/'
+      fullPath: '/statements/'
+      preLoaderRoute: typeof StatementsIndexRouteImport
+      parentRoute: typeof StatementsRoute
+    }
     '/statements/$referenceId': {
       id: '/statements/$referenceId'
       path: '/$referenceId'
@@ -216,10 +233,12 @@ declare module '@tanstack/react-router' {
 
 interface StatementsRouteChildren {
   StatementsReferenceIdRoute: typeof StatementsReferenceIdRoute
+  StatementsIndexRoute: typeof StatementsIndexRoute
 }
 
 const StatementsRouteChildren: StatementsRouteChildren = {
   StatementsReferenceIdRoute: StatementsReferenceIdRoute,
+  StatementsIndexRoute: StatementsIndexRoute,
 }
 
 const StatementsRouteWithChildren = StatementsRoute._addFileChildren(

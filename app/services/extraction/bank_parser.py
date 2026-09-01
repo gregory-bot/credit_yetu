@@ -18,6 +18,16 @@ from app.services.extraction.patterns import DATETIME_RE, PHONE_RE, parse_amount
 
 _DATE_HINTS = ("date", "value date", "txn date", "posting")
 _DESC_HINTS = ("description", "narration", "details", "particulars", "transaction")
+
+# A genuine multi-line narration only ever wraps a line or two. If the date
+# column failed to parse for this bank's layout (wrong column mapped, or an
+# unrecognised date format), every remaining row in the table looks
+# date-less too and would otherwise all get glued onto the first
+# transaction's description forever, producing one entry with a
+# multi-thousand-character description and no amounts — silently corrupting
+# both the score and the UI. Capping the continuation stops that.
+_MAX_WRAP_APPENDS = 3
+_MAX_DESCRIPTION_LEN = 300
 _DEBIT_HINTS = ("debit", "withdrawal", "dr", "money out", "paid out")
 _CREDIT_HINTS = ("credit", "deposit", "cr", "money in", "paid in")
 _BAL_HINTS = ("balance", "running balance")
@@ -130,6 +140,7 @@ def parse_bank(path: str, passcode: str | None = None, bank_code: str | None = N
             result.statement_period = meta["period"]
 
         col_map: dict[str, int] = {}
+        wrap_count = 0
         for page in pdf.pages:
             for table in page.extract_tables() or []:
                 for row in table:
@@ -153,10 +164,20 @@ def parse_bank(path: str, passcode: str | None = None, bank_code: str | None = N
                     debit = abs(parse_amount(cell("debit")))
                     credit = parse_amount(cell("credit"))
                     if not dt and txns:
-                        # Wrapped narration row.
-                        txns[-1].description += f" {desc}"
+                        # Wrapped narration row, but only up to a point — see
+                        # _MAX_WRAP_APPENDS above. Past that, the date column
+                        # itself has likely failed to parse for this bank's
+                        # layout, so further date-less rows are dropped
+                        # rather than corrupting the last real transaction.
+                        if (
+                            wrap_count < _MAX_WRAP_APPENDS
+                            and len(txns[-1].description) < _MAX_DESCRIPTION_LEN
+                        ):
+                            txns[-1].description += f" {desc}"
+                            wrap_count += 1
                         continue
 
+                    wrap_count = 0
                     txns.append(
                         ExtractedTransaction(
                             description=desc,
@@ -174,5 +195,14 @@ def parse_bank(path: str, passcode: str | None = None, bank_code: str | None = N
         result.warnings.append(
             f"No transactions parsed for bank '{bank_code or 'unknown'}'. "
             "A format-specific parser may be required."
+        )
+    elif len(txns) == 1 and txns[0].transaction_datetime is None and not txns[0].paid_in and not txns[0].withdrawn:
+        # Signature of a failed date column (see _MAX_WRAP_APPENDS above):
+        # everything collapsed into one date-less, zero-amount row.
+        result.needs_review = True
+        result.warnings.append(
+            f"Only one, undated, zero-amount transaction was parsed for bank '{bank_code or 'unknown'}'. "
+            "The date column likely wasn't recognised for this statement's layout — "
+            "a format-specific parser may be required."
         )
     return result

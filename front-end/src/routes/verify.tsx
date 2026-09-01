@@ -1,21 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { CheckCircle2, ScanFace, ShieldCheck, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle2, IdCard, ScanFace, ShieldCheck, UserRound, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { AppPage } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EmptyState, ErrorNote, KeyValue, SectionCard } from "@/components/ui-bits";
+import { EmptyState, ErrorNote, KeyValue, SectionCard, StatusBadge } from "@/components/ui-bits";
 import { api, describeError } from "@/lib/api";
 import { getOfficerName, setOfficerName, useRequireAuth } from "@/lib/auth";
 
 export const Route = createFileRoute("/verify")({
   head: () => ({
     meta: [
-      { title: "Verify a client — Credit Yetu" },
+      { title: "Verify a client · Credit Yetu" },
       {
         name: "description",
         content: "IPRS identity lookup, face match against an ID photo, and CRB/KRA checks.",
@@ -27,6 +27,74 @@ export const Route = createFileRoute("/verify")({
 
 type CheckResult = { label: string; ok: boolean | null; data: any } | null;
 
+function StepTitle({ step, children }: { step: number; children: string }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="grid size-6 shrink-0 place-items-center rounded-full bg-brand/15 text-xs font-bold text-[color:oklch(0.55_0.12_74.5)]">
+        {step}
+      </span>
+      {children}
+    </span>
+  );
+}
+
+/** Object URL for a locally-chosen file, revoked automatically when it changes or unmounts. */
+function useFilePreview(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  return url;
+}
+
+function ImagePreview({
+  label,
+  url,
+  icon: Icon,
+  aspect,
+}: {
+  label: string;
+  url: string | null;
+  icon: typeof IdCard;
+  aspect: string;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <div
+        className={`mt-1.5 overflow-hidden rounded-xl border ${aspect} ${
+          url ? "border-border bg-card shadow-card" : "border-dashed border-border bg-muted/30"
+        }`}
+      >
+        {url ? (
+          <img src={url} alt={label} className="size-full object-cover" />
+        ) : (
+          <div className="flex size-full flex-col items-center justify-center gap-1.5 text-muted-foreground">
+            <Icon className="size-6" />
+            <span className="text-[11px]">No photo yet</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function resultEntries(data: unknown) {
+  return Object.entries((data ?? {}) as Record<string, unknown>)
+    .filter(([k]) => !["signature", "fingerprint", "photo"].includes(k))
+    .slice(0, 8)
+    .map(([k, v]): [string, string] => [
+      k.replace(/_/g, " "),
+      typeof v === "object" ? JSON.stringify(v) : String(v),
+    ]);
+}
+
 function VerifyPage() {
   const { ready, isAuthenticated } = useRequireAuth();
 
@@ -36,6 +104,8 @@ function VerifyPage() {
   const [collectedBy, setCollectedBy] = useState(getOfficerName());
   const [selfie, setSelfie] = useState<File | null>(null);
   const [idImage, setIdImage] = useState<File | null>(null);
+  const idImagePreview = useFilePreview(idImage);
+  const selfiePreview = useFilePreview(selfie);
 
   const [identityResult, setIdentityResult] = useState<CheckResult>(null);
   const [faceResult, setFaceResult] = useState<CheckResult>(null);
@@ -155,7 +225,10 @@ function VerifyPage() {
     >
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
-          <SectionCard title="1. Client & consent" description="Required before any check can run.">
+          <SectionCard
+            title={<StepTitle step={1}>Client & consent</StepTitle>}
+            description="Required before any check can run."
+          >
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -191,7 +264,7 @@ function VerifyPage() {
             </div>
           </SectionCard>
 
-          <SectionCard title="2. Identity & face match">
+          <SectionCard title={<StepTitle step={2}>Identity & face match</StepTitle>}>
             <div className="space-y-4">
               <Button
                 type="button"
@@ -204,45 +277,65 @@ function VerifyPage() {
               </Button>
               <ResultCard result={identityResult} />
 
-              <div className="border-t border-border pt-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="id_image">ID card photo</Label>
-                    <Input
-                      id="id_image"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => setIdImage(e.target.files?.[0] ?? null)}
+              <div className="grid gap-4 border-t border-border pt-4 sm:grid-cols-[150px_1fr]">
+                <div className="flex gap-3 sm:flex-col">
+                  <div className="flex-1 sm:flex-none">
+                    <ImagePreview
+                      label="ID card"
+                      url={idImagePreview}
+                      icon={IdCard}
+                      aspect="aspect-[16/10]"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="selfie">Client selfie</Label>
-                    <Input
-                      id="selfie"
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => setSelfie(e.target.files?.[0] ?? null)}
+                  <div className="flex-1 sm:flex-none">
+                    <ImagePreview
+                      label="Selfie"
+                      url={selfiePreview}
+                      icon={UserRound}
+                      aspect="aspect-square"
                     />
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="mt-3"
-                  disabled={faceMatch.isPending}
-                  onClick={() => requireConsentAndId() && faceMatch.mutate()}
-                >
-                  <ScanFace className="size-4" />{" "}
-                  {faceMatch.isPending ? "Matching…" : "Run face match"}
-                </Button>
-                <ResultCard result={faceResult} />
+
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="id_image">ID card photo</Label>
+                      <Input
+                        id="id_image"
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setIdImage(e.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="selfie">Client selfie</Label>
+                      <Input
+                        id="selfie"
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setSelfie(e.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={faceMatch.isPending}
+                    onClick={() => requireConsentAndId() && faceMatch.mutate()}
+                  >
+                    <ScanFace className="size-4" />{" "}
+                    {faceMatch.isPending ? "Matching…" : "Run face match"}
+                  </Button>
+                  <ResultCard result={faceResult} />
+                </div>
               </div>
             </div>
           </SectionCard>
 
           <SectionCard
-            title="3. Additional checks"
-            description="Each runs independently — use whichever your policy needs."
+            title={<StepTitle step={3}>Additional checks</StepTitle>}
+            description="Each runs independently. Use whichever your policy needs."
           >
             <div className="space-y-4">
               <div className="flex flex-wrap gap-2">
@@ -298,12 +391,12 @@ function VerifyPage() {
           <SectionCard title="Recent verifications">
             {recent.isError && <ErrorNote message={describeError(recent.error)} />}
             {recent.data?.length ? (
-              <ul className="space-y-1">
+              <ul className="space-y-1.5">
                 {recent.data.slice(0, 15).map((v) => (
                   <li key={v.reference_id}>
                     <button
                       type="button"
-                      className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs hover:bg-muted"
+                      className="flex w-full items-center justify-between gap-3 rounded-lg border border-transparent px-2.5 py-2 text-left text-xs transition-colors hover:border-border hover:bg-muted"
                       onClick={async () => {
                         try {
                           const data = await api<any>(`/verify/${v.reference_id}`);
@@ -313,10 +406,15 @@ function VerifyPage() {
                         }
                       }}
                     >
-                      <span className="font-medium capitalize">
-                        {v.check_type.replace(/_/g, " ")}
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium capitalize">
+                          {v.check_type.replace(/_/g, " ")}
+                        </span>
+                        <span className="num block truncate text-muted-foreground">
+                          {v.identifier ?? "—"}
+                        </span>
                       </span>
-                      <span className="num text-muted-foreground">{v.identifier ?? "—"}</span>
+                      <StatusBadge status={v.status ?? "unknown"} className="shrink-0" />
                     </button>
                   </li>
                 ))}
@@ -331,9 +429,7 @@ function VerifyPage() {
 
           {pastResult && (
             <SectionCard title="Selected result">
-              <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-[11px] leading-relaxed">
-                {JSON.stringify(pastResult.data, null, 2)}
-              </pre>
+              <KeyValue items={resultEntries(pastResult.data?.data ?? pastResult.data)} />
             </SectionCard>
           )}
         </div>
@@ -363,15 +459,7 @@ function ResultCard({ result }: { result: CheckResult }) {
         </p>
         {badge}
       </div>
-      <KeyValue
-        items={Object.entries(result.data ?? {})
-          .filter(([k]) => !["signature", "fingerprint", "photo"].includes(k))
-          .slice(0, 8)
-          .map(([k, v]) => [
-            k.replace(/_/g, " "),
-            typeof v === "object" ? JSON.stringify(v) : String(v),
-          ])}
-      />
+      <KeyValue items={resultEntries(result.data)} />
     </div>
   );
 }

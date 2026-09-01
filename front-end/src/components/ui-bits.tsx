@@ -51,23 +51,19 @@ export function SectionCard({
   children,
   className,
 }: {
-  title?: string;
+  title?: ReactNode;
   description?: string;
   action?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
   return (
-    <section
-      className={cn("rounded-xl border border-border bg-card shadow-card", className)}
-    >
+    <section className={cn("rounded-xl border border-border bg-card shadow-card", className)}>
       {(title || action) && (
         <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div>
             {title && <h2 className="text-sm font-semibold tracking-tight">{title}</h2>}
-            {description && (
-              <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-            )}
+            {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
           </div>
           {action}
         </header>
@@ -150,7 +146,15 @@ export function ScoreGauge({
           />
         ))}
         <g transform={`rotate(${angle} ${cx} ${cy})`}>
-          <line x1={cx} y1={cy} x2={cx} y2={cy - R + 22} stroke="var(--foreground)" strokeWidth={5} strokeLinecap="round" />
+          <line
+            x1={cx}
+            y1={cy}
+            x2={cx}
+            y2={cy - R + 22}
+            stroke="var(--foreground)"
+            strokeWidth={5}
+            strokeLinecap="round"
+          />
         </g>
         <circle cx={cx} cy={cy} r={10} fill="var(--foreground)" />
       </svg>
@@ -163,7 +167,15 @@ export function ScoreGauge({
   );
 }
 
-export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/50 px-6 py-12 text-center">
       <p className="text-sm font-semibold">{title}</p>

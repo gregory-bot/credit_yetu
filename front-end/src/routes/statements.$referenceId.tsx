@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { FileSpreadsheet, FileText } from "lucide-react";
+import { AlertTriangle, FileSpreadsheet, FileText, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { AppPage } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -11,13 +11,15 @@ import {
   ScoreGauge,
   SectionCard,
   StatusBadge,
+  toneForStatus,
 } from "@/components/ui-bits";
+import { cn } from "@/lib/utils";
 import { api, describeError, downloadReport } from "@/lib/api";
 import { useRequireAuth } from "@/lib/auth";
 
 export const Route = createFileRoute("/statements/$referenceId")({
   head: () => ({
-    meta: [{ title: "Statement — Credit Yetu" }],
+    meta: [{ title: "Statement · Credit Yetu" }],
   }),
   component: StatementDetail,
 });
@@ -35,6 +37,11 @@ type StatementStatus = {
 };
 
 const TERMINAL_STATUSES = ["scored", "needs_review", "failed"];
+// A genuine multi-line narration only ever runs a sentence or two. Past this,
+// a description is almost certainly a parsing artefact (see the backend's
+// _MAX_DESCRIPTION_LEN guard) — collapse it behind a toggle instead of
+// stretching the whole row.
+const DESCRIPTION_PREVIEW_LEN = 140;
 
 function money(v: number | null | undefined) {
   if (v === null || v === undefined) return "—";
@@ -43,6 +50,26 @@ function money(v: number | null | undefined) {
 
 function ratio(v: number | null | undefined) {
   return v === null || v === undefined ? "—" : v.toFixed(2);
+}
+
+function Description({ text }: { text: string }) {
+  if (text.length <= DESCRIPTION_PREVIEW_LEN) {
+    return <p className="break-words text-sm">{text || "—"}</p>;
+  }
+  return (
+    <details className="group">
+      <summary className="cursor-pointer break-words text-sm marker:content-none">
+        {text.slice(0, DESCRIPTION_PREVIEW_LEN)}
+        <span className="text-muted-foreground">…</span>{" "}
+        <span className="text-xs font-medium text-brand underline decoration-dotted group-open:hidden">
+          Show full text
+        </span>
+      </summary>
+      <p className="mt-1 break-words font-mono text-xs leading-relaxed text-muted-foreground">
+        {text}
+      </p>
+    </details>
+  );
 }
 
 function StatementDetail() {
@@ -84,6 +111,9 @@ function StatementDetail() {
   const flagged = (transactions.data ?? []).filter((t) => t.is_flagged);
   const monthlyRows: any[] = summary.data?.financial_summary?.monthly_detail?.rows ?? [];
   const ratios = score.data?.score_breakdown?.ratios ?? {};
+  const riskLevel: string | undefined = score.data?.fraud_data?.risk_level;
+  const riskScore: number = score.data?.fraud_data?.risk_score ?? 0;
+  const riskTone = toneForStatus(riskLevel);
 
   return (
     <AppPage
@@ -119,7 +149,7 @@ function StatementDetail() {
           <div className="flex items-center gap-3">
             <span className="size-2.5 animate-pulse rounded-full bg-warning" />
             <p className="text-sm font-medium">
-              Processing — status: <span className="capitalize">{status.data.status}</span>. This
+              Processing. Status: <span className="capitalize">{status.data.status}</span>. This
               page updates automatically.
             </p>
           </div>
@@ -132,28 +162,29 @@ function StatementDetail() {
 
       {isTerminal && score.data && (
         <div className="space-y-6">
-          <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-            <SectionCard title="Credit score">
-              <ScoreGauge
-                score={score.data.score_data.credit_score}
-                grade={score.data.score_data.grade}
-              />
-              <div className="mt-4 border-t border-border pt-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">
+          <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
+            <SectionCard className="bg-gradient-to-b from-brand/10 to-card">
+              <div className="flex flex-col items-center text-center">
+                <ScoreGauge
+                  score={score.data.score_data.credit_score}
+                  grade={score.data.score_data.grade}
+                />
+                <StatusBadge status={status.data?.status ?? ""} className="mt-2" />
+              </div>
+              <div className="mt-5 rounded-xl border border-border bg-background/60 p-4 text-center">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Affordability
                 </p>
-                <p className="num mt-1 text-lg font-semibold">
-                  {money(score.data.score_data.affordability?.low)} –{" "}
+                <p className="num mt-1 text-xl font-bold">
+                  {money(score.data.score_data.affordability?.low)}
+                  <span className="mx-1 font-normal text-muted-foreground">to</span>
                   {money(score.data.score_data.affordability?.high)}
                 </p>
               </div>
-              <div className="mt-3">
-                <StatusBadge status={status.data?.status ?? ""} />
-              </div>
             </SectionCard>
 
-            <div className="space-y-6">
-              <SectionCard title="Account">
+            <div className="grid gap-6 sm:grid-cols-2">
+              <SectionCard title="Account" className="sm:col-span-2">
                 <KeyValue
                   items={[
                     ["Account holder", status.data?.account_holder],
@@ -166,31 +197,57 @@ function StatementDetail() {
                 />
               </SectionCard>
 
-              <SectionCard title="Important ratios">
-                <KeyValue
-                  items={[
-                    ["Debt to income", ratio(ratios.debt_to_income)],
-                    ["Income volatility", ratio(ratios.income_volatility)],
-                    ["Betting to income", ratio(ratios.betting_to_income)],
-                    ["Expenses to income", ratio(ratios.expenses_to_income)],
-                  ]}
-                />
-              </SectionCard>
+              <div className="grid grid-cols-2 gap-3 sm:col-span-2 sm:grid-cols-4">
+                {[
+                  ["Debt to income", ratios.debt_to_income],
+                  ["Income volatility", ratios.income_volatility],
+                  ["Betting to income", ratios.betting_to_income],
+                  ["Expenses to income", ratios.expenses_to_income],
+                ].map(([label, value]) => (
+                  <div
+                    key={label as string}
+                    className="rounded-xl border border-border bg-card p-4 shadow-card"
+                  >
+                    <p className="text-[11px] font-medium uppercase leading-tight tracking-wide text-muted-foreground">
+                      {label}
+                    </p>
+                    <p className="num mt-1.5 text-lg font-semibold">{ratio(value as number)}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
-          <SectionCard title="Authenticity check">
-            <KeyValue
-              items={[
-                ["Risk score", `${score.data.fraud_data?.risk_score ?? "—"} / 100`],
-                ["Risk level", score.data.fraud_data?.risk_level?.toUpperCase()],
-                [
-                  "Signals",
-                  (score.data.fraud_data?.reasons ?? []).join("; ") ||
-                    "No tampering signals detected.",
-                ],
-              ]}
-            />
+          <SectionCard
+            title="Authenticity check"
+            action={
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <ShieldCheck className="size-3.5" /> Risk {riskScore} / 100
+              </span>
+            }
+          >
+            <div className="flex flex-wrap items-center gap-4">
+              <StatusBadge status={riskLevel ?? "unknown"} tone={riskTone} />
+              <div className="h-1.5 min-w-[160px] flex-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full",
+                    riskTone === "success"
+                      ? "bg-success"
+                      : riskTone === "warning"
+                        ? "bg-warning"
+                        : riskTone === "danger"
+                          ? "bg-danger"
+                          : "bg-muted-foreground",
+                  )}
+                  style={{ width: `${Math.min(100, Math.max(0, riskScore))}%` }}
+                />
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-muted-foreground">
+              {(score.data.fraud_data?.reasons ?? []).join("; ") ||
+                "No tampering signals detected."}
+            </p>
           </SectionCard>
 
           {monthlyRows.length > 0 && (
@@ -226,21 +283,28 @@ function StatementDetail() {
             title="Score reasons"
             description="Every point on the score traces to one of these rules."
           >
-            <div className="space-y-2">
+            <div className="space-y-1">
               {(score.data.reason_codes ?? []).map((rc: any) => (
                 <div
                   key={rc.code}
-                  className="flex items-start justify-between gap-4 border-b border-border py-2 text-sm last:border-0"
+                  className="flex items-start gap-3 border-b border-border py-2.5 last:border-0"
                 >
-                  <div>
-                    <p className="font-medium">{rc.reason}</p>
-                    <p className="text-xs text-muted-foreground">{rc.detail}</p>
-                  </div>
                   <span
-                    className={`num shrink-0 font-semibold ${rc.points > 0 ? "text-success" : rc.points < 0 ? "text-danger" : "text-muted-foreground"}`}
+                    className={cn(
+                      "num mt-0.5 grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold",
+                      rc.points > 0
+                        ? "bg-success/10 text-success"
+                        : rc.points < 0
+                          ? "bg-danger/10 text-danger"
+                          : "bg-muted text-muted-foreground",
+                    )}
                   >
                     {rc.points > 0 ? `+${rc.points}` : rc.points}
                   </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{rc.reason}</p>
+                    <p className="text-xs text-muted-foreground">{rc.detail}</p>
+                  </div>
                 </div>
               ))}
             </div>
@@ -248,34 +312,31 @@ function StatementDetail() {
 
           <SectionCard
             title={`Flagged transactions (${flagged.length})`}
-            description="Every flag traces to a rule — self-transfer, a one-off amount outside the normal pattern, or a distress keyword."
+            description="Every flag traces to a rule: self-transfer, a one-off amount outside the normal pattern, or a distress keyword."
           >
             {flagged.length ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-brand/15 text-left text-xs uppercase tracking-wide">
-                      <th className="rounded-l-md px-3 py-2 font-semibold">Date</th>
-                      <th className="px-3 py-2 font-semibold">Description</th>
-                      <th className="px-3 py-2 font-semibold">Amount</th>
-                      <th className="rounded-r-md px-3 py-2 font-semibold">Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {flagged.map((t, i) => (
-                      <tr key={i} className="border-b border-border last:border-0 align-top">
-                        <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                          {t.date ? new Date(t.date).toLocaleDateString() : "—"}
-                        </td>
-                        <td className="px-3 py-2.5">{t.description}</td>
-                        <td className="num px-3 py-2.5">{money(t.paid_in || t.withdrawn)}</td>
-                        <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                          {t.flag_reason}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-3">
+                {flagged.map((t, i) => (
+                  <div key={i} className="rounded-xl border border-warning/30 bg-warning/5 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:oklch(0.6_0.13_74.5)]" />
+                        <div className="min-w-0">
+                          <Description text={t.description ?? ""} />
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t.date ? new Date(t.date).toLocaleDateString() : "No date on record"}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="num shrink-0 text-sm font-semibold">
+                        {money(t.paid_in || t.withdrawn)}
+                      </span>
+                    </div>
+                    <p className="mt-2 inline-block rounded-full bg-background px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                      {t.flag_reason}
+                    </p>
+                  </div>
+                ))}
               </div>
             ) : (
               <EmptyState
@@ -284,27 +345,6 @@ function StatementDetail() {
               />
             )}
           </SectionCard>
-
-          {score.data.ml_shadow && (
-            <SectionCard
-              title="ML shadow model"
-              description="Non-authoritative — never affects the score or affordability above."
-            >
-              {score.data.ml_shadow.status === "shadow" ? (
-                <KeyValue
-                  items={[
-                    ["Model version", score.data.ml_shadow.model_version],
-                    ["Predicted", score.data.ml_shadow.predicted_label],
-                    ["Probability of default", score.data.ml_shadow.probability_of_default],
-                  ]}
-                />
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  {score.data.ml_shadow.reason ?? "Not available yet."}
-                </p>
-              )}
-            </SectionCard>
-          )}
         </div>
       )}
     </AppPage>

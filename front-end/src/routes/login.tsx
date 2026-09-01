@@ -19,13 +19,13 @@ export const Route = createFileRoute("/login")({
   }),
   head: () => ({
     meta: [
-      { title: "Sign in — Credit Yetu" },
+      { title: "Sign in · Credit Yetu" },
       {
         name: "description",
         content:
           "Sign in to Credit Yetu or create an individual or company account to start scoring customers.",
       },
-      { property: "og:title", content: "Sign in — Credit Yetu" },
+      { property: "og:title", content: "Sign in · Credit Yetu" },
       {
         property: "og:description",
         content: "Transparent credit scoring and identity verification, for your whole team.",
@@ -277,7 +277,7 @@ function SignUpForm() {
       }
       setApiKey(data.api_key);
       setOfficerName(form.name);
-      toast.success("Account created — welcome to Credit Yetu");
+      toast.success("Account created. Welcome to Credit Yetu.");
       navigate({ to: "/dashboard" });
     },
     onError: (err) => toast.error(describeError(err)),
@@ -381,12 +381,6 @@ function SignUpForm() {
       >
         {signup.isPending ? "Creating account…" : "Create account"}
       </Button>
-
-      <p className="flex items-start gap-2 text-xs text-muted-foreground">
-        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-        Your password is never stored in plain text, and your data stays scoped to your organization
-        only.
-      </p>
     </form>
   );
 }

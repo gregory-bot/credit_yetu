@@ -13,7 +13,7 @@ import { getOfficerName, setOfficerName, useRequireAuth } from "@/lib/auth";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
-    meta: [{ title: "Settings — Credit Yetu" }],
+    meta: [{ title: "Settings · Credit Yetu" }],
   }),
   component: SettingsPage,
 });
@@ -81,7 +81,7 @@ function SettingsPage() {
 
         <SectionCard
           title="API keys"
-          description="For programmatic access — separate from your dashboard password."
+          description="For programmatic access, separate from your dashboard password."
           className="lg:col-span-2"
         >
           <div className="space-y-4">
@@ -101,7 +101,7 @@ function SettingsPage() {
             {issuedKey && (
               <div className="rounded-xl border border-success/30 bg-success/5 p-4">
                 <p className="text-xs text-muted-foreground">
-                  Shown <strong className="text-danger">once</strong> — copy it now.
+                  Shown <strong className="text-danger">once</strong>. Copy it now.
                 </p>
                 <div className="num mt-2 break-all rounded-lg border border-border bg-card p-3 text-xs">
                   {issuedKey}

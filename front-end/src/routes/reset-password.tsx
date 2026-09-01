@@ -14,7 +14,7 @@ export const Route = createFileRoute("/reset-password")({
     token: typeof search["token"] === "string" ? search["token"] : undefined,
   }),
   head: () => ({
-    meta: [{ title: "Reset password — Credit Yetu" }],
+    meta: [{ title: "Reset password · Credit Yetu" }],
   }),
   component: ResetPasswordPage,
 });

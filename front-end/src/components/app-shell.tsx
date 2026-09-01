@@ -12,15 +12,13 @@ export function Logo({ light = false }: { light?: boolean }) {
         <span className="block text-base font-bold tracking-tight text-brand-foreground">
           Credit Yetu
         </span>
-        <span className={`block text-[11px] ${light ? "text-brand-foreground/70" : "text-muted-foreground"}`}>
-          Transparent credit scoring, explained.
-        </span>
       </span>
     </Link>
   );
 }
 
 const navItems = [
+  { to: "/", label: "Home" },
   { to: "/dashboard", label: "Dashboard" },
   { to: "/customers", label: "Customers" },
   { to: "/statements", label: "Statements" },
@@ -42,6 +40,7 @@ export function TopNav() {
             <Link
               key={item.to}
               to={item.to}
+              activeOptions={{ exact: item.to === "/" }}
               className="rounded-md px-3 py-2 text-sm font-medium text-brand-foreground/85 transition-colors hover:bg-brand-foreground/10 hover:text-brand-foreground"
               activeProps={{ className: "bg-brand-foreground/15 text-brand-foreground" }}
             >
@@ -63,7 +62,11 @@ export function TopNav() {
               <LogOut className="size-4" /> Sign out
             </Button>
           ) : (
-            <Button asChild size="sm" className="bg-danger text-danger-foreground hover:bg-danger/90">
+            <Button
+              asChild
+              size="sm"
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+            >
               <Link to="/login" search={{ mode: "signin" }}>
                 Sign in
               </Link>
@@ -96,6 +99,64 @@ export function TopNav() {
   );
 }
 
+const footerColumns = [
+  {
+    heading: "Product",
+    links: [
+      { to: "/dashboard", label: "Dashboard" },
+      { to: "/statements", label: "Statements" },
+      { to: "/verify", label: "Verify" },
+    ],
+  },
+  {
+    heading: "Account",
+    links: [
+      { to: "/", label: "Home" },
+      { to: "/customers", label: "Customers" },
+      { to: "/settings", label: "Settings" },
+    ],
+  },
+] as const;
+
+export function Footer() {
+  return (
+    <footer className="border-t border-brand-foreground/15 bg-brand">
+      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
+        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[2fr_1fr_1fr]">
+          <div>
+            <Logo light />
+            <p className="mt-4 max-w-xs text-sm text-brand-foreground/70">
+              Explainable credit scoring, statement extraction and identity verification for Kenyan
+              lenders.
+            </p>
+          </div>
+          {footerColumns.map((col) => (
+            <div key={col.heading}>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-foreground/60">
+                {col.heading}
+              </h3>
+              <nav className="mt-3 flex flex-col gap-2.5 text-sm">
+                {col.links.map((item) => (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    className="text-brand-foreground/80 transition-colors hover:text-brand-foreground"
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+            </div>
+          ))}
+        </div>
+        <div className="mt-10 flex flex-col gap-2 border-t border-brand-foreground/15 pt-6 text-xs text-brand-foreground/60 sm:flex-row sm:items-center sm:justify-between">
+          <p>© {new Date().getFullYear()} Credit Yetu. All rights reserved.</p>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
 export function AppPage({
   title,
   description,
@@ -108,9 +169,9 @@ export function AppPage({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="flex min-h-screen flex-col bg-background">
       <TopNav />
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
@@ -120,6 +181,7 @@ export function AppPage({
         </div>
         {children}
       </main>
+      <Footer />
     </div>
   );
 }
