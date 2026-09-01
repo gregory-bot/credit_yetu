@@ -113,6 +113,45 @@ Nothing in this codebase does that automatically.
 
 ## Architecture
 
+```mermaid
+flowchart TD
+    Client(["Lender / Client app"]) -->|"Bearer API key"| API["FastAPI app<br/>main.py"]
+
+    API --> Auth["auth"]
+    API --> Customers["customers"]
+    API --> Statements["statements"]
+    API --> Verify["verification&nbsp;/&nbsp;business"]
+    API --> ML["ml"]
+
+    Statements -->|"upload statement"| Pipeline["pipeline.process_statement<br/>(background task)"]
+
+    subgraph Flow["Statement processing pipeline"]
+        direction LR
+        Extract["Extract<br/>text + OCR"] --> Classify["Classify<br/>loan / contra / outlier"]
+        Classify --> Summary["Financial<br/>summary"]
+        Summary --> Fraud["Fraud<br/>forensics"]
+        Fraud --> Score["Score engine<br/>(authoritative)"]
+        Score --> Reports["PDF + Excel<br/>reports"]
+    end
+
+    Pipeline --> Flow
+    Score -.->|"read-only, never decides"| Shadow["ML shadow model"]
+    Reports -->|"if callback_url set"| Callback["Webhook callback"]
+
+    Verify -->|"KYC / CRB check"| Provider["IdentityProvider"]
+    Provider --> Mock["Sandbox mock<br/>(default)"]
+    Provider -.->|"swap via KYC_PROVIDER"| RealProvider["Real provider<br/>e.g. Spin Mobile"]
+
+    Flow --> DB[("PostgreSQL")]
+    Verify --> DB
+    ML --> DB
+    Customers --> DB
+    Auth --> DB
+```
+
+<details>
+<summary><b>Project layout (file tree)</b> — click to expand</summary>
+
 ```
 app/
   main.py                 FastAPI app, CORS, exception handlers, health/config
@@ -137,6 +176,8 @@ app/
 migrations/               0001_init.sql, 0002_ml_shadow_scoring.sql
 scripts/                  init_db, sample-statement generator, train_model (CLI for ml.train)
 ```
+
+</details>
 
 Requires **Python 3.11 or 3.12** (scikit-learn/numpy wheels aren't published
 for 3.14 on every platform yet; 3.14 fails at `pip install`, not at runtime).
