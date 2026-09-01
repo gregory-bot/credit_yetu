@@ -8,11 +8,14 @@ Every endpoint:
 """
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_org
-from app.core.errors import AppError
+from app.core.errors import AppError, NotFound
 from app.core.responses import ok
 from app.database import get_db
 from app.models import Organization, Verification
@@ -50,6 +53,35 @@ def _log(db: Session, org: Organization, check_type: str, identifier: str | None
     db.add(v)
     db.commit()
     return v
+
+
+@router.get("/{reference_id}")
+def get_verification(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
+    """Fetch a past verification result by its reference_id.
+
+    Covers every check type this router (and ``/business/verify``) creates —
+    the ``verifications`` table is shared, so a business-registration check's
+    reference_id is fetchable here too, not just identity/CRB/telco ones.
+    """
+    try:
+        ref = uuid.UUID(reference_id)
+    except ValueError as exc:
+        raise NotFound("Invalid reference_id.") from exc
+    v = db.scalar(select(Verification).where(Verification.reference_id == ref, Verification.organization_id == org.id))
+    if not v:
+        raise NotFound("Verification not found.")
+    return ok({
+        "reference_id": str(v.reference_id),
+        **(v.result or {}),
+        "audit": {
+            "check_type": v.check_type,
+            "identifier": v.identifier,
+            "consent": v.consent,
+            "consent_collected_by": v.consent_collected_by,
+            "verification_status": v.status,
+            "created_at": v.created_at.isoformat(),
+        },
+    })
 
 
 @router.post("/identity")
