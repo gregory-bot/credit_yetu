@@ -30,6 +30,8 @@ CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "agent": ("withdraw", "agent", "cash out"),
     "transfer": ("customer transfer", "send money", "funds transfer", "sent to", "received from"),
     "savings": ("mshwari lock", "lock savings", "goal savings", "deposit"),
+    "remittance": ("western union", "worldremit", "mukuru", "sendwave", "wave remit",
+                   "remitly", "moneygram", "diaspora", "swift transfer", "ria money"),
 }
 
 # Non-performing / distress signals used to flag individual transactions.

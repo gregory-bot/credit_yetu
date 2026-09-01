@@ -25,6 +25,16 @@ class Organization(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # Password auth for the human dashboard (app/api/v1/auth.py). Nullable
+    # because it was added after API keys existed as the only credential —
+    # an org created before this column existed simply can't log in with a
+    # password until one is set. Bearer API keys (below) remain the
+    # credential every actual API request is authorized with; a password
+    # only ever gets you a fresh API key via POST /auth/login.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    password_reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
 
 

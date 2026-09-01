@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     ml_test_size: float = 0.25
     ml_random_state: int = 42
 
+    # Password auth (see app/api/v1/auth.py). The frontend that consumes this
+    # app.
+    frontend_base_url: str = "http://localhost:8080"
+
+    # Outbound email (password reset). Left blank, this app never fails a
+    # request over it — the email is logged instead, so local dev works with
+    # no mail server configured. Fill these in for real delivery.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

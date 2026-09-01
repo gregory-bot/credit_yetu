@@ -37,8 +37,8 @@ line.
   row the table parser missed, so nothing silently drops out.
 - **Classifies every transaction** as normal, loan, contra (a transfer between
   the client's own accounts), or a one-off outlier — plus a spending/income
-  category (Fuliza, M-Shwari, betting, airtime, salary, utilities, P2P…).
-  Anything flagged always comes with a plain-English reason.
+  category (Fuliza, M-Shwari, betting, airtime, salary, remittance,
+  utilities, P2P…). Anything flagged always comes with a plain-English reason.
 - **Builds the financial summary credit teams actually need** — the piece a
   bare score usually skips: totals, per-category in/out, a month-by-month
   Credits/Loans/Outliers/Net reconciliation table, and balance trends. It's
@@ -50,7 +50,7 @@ line.
   auto-declines on its own.
 - **Scores transparently.** A base score adjusted by isolated, individually
   auditable rules, each worth a documented number of points with its own
-  reason code; a DTI-based loan limit (product-specific) net of any CRB
+  reason code; a DTI-based affordability figure (product-specific) net of any CRB
   obligation; grade bands from D to AA.
 - **Generates a branded PDF scorecard and Excel workbook** from that same
   persisted data — see [below](#the-scorecard-pdf-and-excel-export).
@@ -64,7 +64,7 @@ line.
 ## Why it's built this way
 
 1. **The rule engine decides, not a black box.** `credit_score`, `grade`, and
-   the loan limit always come from the transparent rule engine — never from a
+   the affordability figure always come from the transparent rule engine — never from a
    classifier quoting a made-up accuracy figure. Manufacturing that kind of
    false confidence is exactly what erodes a credit team's trust in scoring
    in the first place. (See [ML shadow-scoring](#ml-shadow-scoring) for how a
@@ -105,7 +105,7 @@ there's a second, **non-authoritative** track:
    `shadow`, and every `.../score` response gains a non-authoritative
    `ml_shadow` block (`probability_of_default`, the model version, its test
    metrics) purely for monitoring and calibration. `credit_score`, `grade`,
-   and the loan limit are computed *before* `ml_shadow` is even looked up.
+   and the affordability figure are computed *before* `ml_shadow` is even looked up.
 
 Promoting a shadow model to actually influence scoring is a deliberate future
 step — versioned, documented, reversible — once its track record earns it.
@@ -219,12 +219,17 @@ uvicorn app.main:app --reload
 ## Usage
 
 ```bash
-# Create an organization + first API key (key is shown once)
+# Create an organization (with a password) + first API key (key is shown once)
 curl -X POST localhost:8000/api/v1/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"name":"Acme Capital","email":"ops@acmecapital.co","account_type":"business"}'
+  -d '{"name":"Acme Capital","email":"ops@acmecapital.co","password":"a-strong-password","account_type":"business"}'
 
 KEY=pk_test_...   # from the response
+
+# Later: sign back in with the password instead (issues a fresh key)
+curl -X POST localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ops@acmecapital.co","password":"a-strong-password"}'
 
 # Upload a statement (async -> returns a reference_id)
 curl -X POST localhost:8000/api/v1/statements/upload \
@@ -254,16 +259,20 @@ curl -H "Authorization: Bearer $KEY" localhost:8000/api/v1/verify/<reference_id>
 
 ## Endpoints
 
-Auth is a Bearer API key on everything except signup and the meta routes.
+Every request is authorized with a Bearer API key (see [Password auth](#password-auth-and-api-keys)
+below for how you get one) except signup, login, password reset, and the meta routes.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/auth/signup` | Create org (personal/business) + first key |
-| POST | `/api/v1/auth/api-keys` | Mint another API key |
+| POST | `/api/v1/auth/signup` | Create org (personal/business) with a password + first key |
+| POST | `/api/v1/auth/login` | Password sign-in — issues a fresh API key |
+| POST | `/api/v1/auth/forgot-password` · `/reset-password` | Email a reset link; consume it |
+| POST | `/api/v1/auth/api-keys` | Mint another API key (for scripts/integrations) |
 | GET  | `/api/v1/auth/me` | Current org |
 | POST/GET | `/api/v1/customers` | Register / list customers |
 | GET  | `/api/v1/customers/{national_id}` | Fetch a customer |
 | POST | `/api/v1/statements/upload` | Upload statement (async scoring) |
+| GET  | `/api/v1/statements` | List this org's statements (`?national_id=` to scope to one customer) |
 | GET  | `/api/v1/statements/{ref}` | Processing status |
 | GET  | `/api/v1/statements/{ref}/score` | Score + reason codes + fraud |
 | GET  | `/api/v1/statements/{ref}/summary` | Full financial summary |
@@ -274,11 +283,34 @@ Auth is a Bearer API key on everything except signup and the meta routes.
 | POST | `/api/v1/verify/crb/metropol` · `/crb/creditinfo` | CRB checks |
 | POST | `/api/v1/verify/phone/hakikisha` · `/mpesa-kyc` · `/sim-swap` · `/phone-search` | Telco checks |
 | POST | `/api/v1/verify/bank-account` · `/full-kyc` · `/employer` · `/face-match` | Bank / composite |
+| GET  | `/api/v1/verify` | List this org's past verifications |
 | GET  | `/api/v1/verify/{reference_id}` | Fetch a past verification result (any check type, incl. `/business/verify`'s) |
 | POST | `/api/v1/business/verify` | Business (SME) registration lookup |
 | POST | `/api/v1/ml/outcomes/{ref}` · `/ml/train` | Record a loan outcome; (re)train the shadow model |
 | GET  | `/api/v1/ml/status` · `/ml/models` | Labeling progress; full training audit trail |
 | GET  | `/health` · `/config` · `/` | Meta |
+
+## Password auth and API keys
+
+Two credentials, two purposes:
+
+- **Password** — how a human signs into the dashboard. `POST /auth/signup`
+  (with a password) and `POST /auth/login` both hand back a fresh Bearer API
+  key on success; there's no separate session cookie or JWT. Forgot it?
+  `POST /auth/forgot-password` emails a reset link (`FRONTEND_BASE_URL` in
+  `.env` controls the link's host) that's valid for 1 hour; with no SMTP
+  configured, the email is logged to the server console instead of sent, so
+  the whole flow still works with zero mail infrastructure in local dev.
+- **API key** — what every actual request is authorized with
+  (`Authorization: Bearer pk_...`), whether it came from a password login or
+  from `POST /auth/api-keys` (for a script/server integration). Passwords
+  are hashed with bcrypt (slow, salted — appropriate for user-chosen
+  secrets); API keys and reset tokens use a fast peppered SHA-256 hash
+  (appropriate for high-entropy random values, where speed doesn't help an
+  attacker) — see `app/core/security.py`.
+
+A minimal reference frontend (`front-end/`, React + TanStack Start) consumes
+this API directly — see its own README for setup.
 
 ## The scorecard PDF and Excel export
 
@@ -289,16 +321,25 @@ response or with each other.
 - **PDF** (`app/services/reporting/pdf_report.py`): a two-page scorecard —
   client info, a semicircular score gauge (banded Poor → Excellent, needle on
   the client's actual score), the month-by-month financial reconciliation
-  table, the full list of scoring reasons, every flagged transaction with its
+  table, a **breakdown donut** (Betting / Salary / Loans / Remittance /
+  Other, as a share of total activity) alongside four **important ratios**
+  (Debt-to-Income, Income Volatility, Betting-to-Income, Expenses-to-Income),
+  the full list of scoring reasons, every flagged transaction with its
   reason, and the authenticity check. Set in **Consolas** where a licensed
   copy is available on the machine generating the report (it's a commercial
   Microsoft font, never bundled with this project); falls back to Courier
   automatically otherwise, so report generation never breaks over a missing
   font.
 - **Excel** (`app/services/reporting/excel_report.py`): three sheets —
-  Summary, Monthly Detail (the same reconciliation table), and every
-  transaction with its classification, flagged rows highlighted with a
-  filter enabled.
+  Summary (headline metrics, the same breakdown as a real native pie chart,
+  and category/monthly trend tables), Monthly Detail (the reconciliation
+  table), and every transaction with its classification, flagged rows
+  highlighted with a filter enabled.
+
+The breakdown and ratios come from `app.services.summary.financial_summary`
+(`breakdown_slices()`) and the scoring engine's `ratios` block respectively —
+both PDF and Excel import the same functions/fields, so they can never show
+two different breakdowns of the same statement.
 
 ## Swapping the mock KYC provider for a real one
 
@@ -315,7 +356,12 @@ integration exists when it doesn't.
 ## Security notes
 
 - API keys are shown once; only a **peppered SHA-256 hash** is stored;
-  verification is constant-time.
+  verification is constant-time. Passwords use **bcrypt**, a deliberately
+  slower hash appropriate for user-chosen secrets (see
+  [Password auth and API keys](#password-auth-and-api-keys)).
+- Password-reset emails require SMTP configuration in production —
+  without it, reset links are only logged to the server console, which is
+  fine for local dev but obviously not for real users.
 - All borrower checks require explicit `consent` + `consent_collected_by`,
   persisted on every `Verification` row — and every result is fetchable
   later, org-scoped, via `GET /api/v1/verify/{reference_id}`.

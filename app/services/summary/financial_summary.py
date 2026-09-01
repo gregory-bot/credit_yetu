@@ -21,7 +21,7 @@ from app.services.extraction.models import ExtractedTransaction
 
 _CATEGORY_KEYS = (
     "betting", "airtime", "fuliza", "mshwari", "kcb_mpesa", "salary",
-    "utilities", "merchant", "agent", "transfer", "savings",
+    "utilities", "merchant", "agent", "transfer", "savings", "remittance",
 )
 
 
@@ -233,3 +233,52 @@ def build_summary(transactions: list[ExtractedTransaction]) -> dict:
             "active_months": len(m_received),
         },
     }
+
+
+# A curated, headline breakdown (Betting / Salary / Loans / Remittance /
+# Other) — a deliberately small, readable set for a chart or at-a-glance
+# panel, as opposed to the full `categories` block above. Both the PDF and
+# Excel reports import this so they can never show two different breakdowns
+# of the same statement.
+_BREAKDOWN_COLORS = {
+    "Betting": "#F0932B",
+    "Salary": "#2E8B3D",
+    "Loans": "#3B2F8F",
+    "Remittance": "#6B7280",
+    "Other": "#D9D5EC",
+}
+
+
+def breakdown_slices(summary: dict) -> list[dict]:
+    """Percentage-of-total-activity breakdown for the headline categories.
+
+    "Total activity" (denominator) is total received + total sent, so the
+    slices read as "how much of everything that happened in this statement
+    was betting / salary / loan movement / remittance", with whatever isn't
+    one of those rolled into "Other" — never silently dropped or rescaled to
+    make the named categories alone add up to 100%.
+    """
+    totals = summary["totals"]
+    behaviour = summary["behaviour"]
+    lending = summary["lending"]
+    categories = summary.get("categories", {})
+
+    denom = totals["total_received"] + totals["total_sent"]
+    if denom <= 0:
+        return []
+
+    remittance_cat = categories.get("remittance", {})
+    named = {
+        "Betting": categories.get("betting", {}).get("out", 0.0),
+        "Salary": behaviour.get("salary_in", 0.0),
+        "Loans": lending.get("loan_received_total", 0.0) + lending.get("loan_repaid_total", 0.0),
+        "Remittance": remittance_cat.get("in", 0.0) + remittance_cat.get("out", 0.0),
+    }
+    other = max(0.0, denom - sum(named.values()))
+    named["Other"] = other
+
+    return [
+        {"label": label, "value": round(value, 2), "pct": round(value / denom, 4), "color": _BREAKDOWN_COLORS[label]}
+        for label, value in named.items()
+        if value > 0
+    ]

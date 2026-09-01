@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.services.scoring.rules import ALL_RULES, RuleOutcome, rule_income_level
+from app.services.scoring.rules import ALL_RULES, RuleOutcome, income_volatility, rule_income_level
 
 BASE_SCORE = 500
 MIN_SCORE = 300
@@ -111,6 +111,18 @@ def score_statement(
     if needs_review:
         limit_low = limit_high = 0.0
 
+    # Ratios a credit analyst reads alongside the score — computed here so
+    # they're guaranteed consistent with the same summary/inputs the score
+    # itself used, never a separate recalculation downstream (in the PDF,
+    # say) that could silently drift.
+    volatility = income_volatility(summary)
+    ratios = {
+        "debt_to_income": round(crb_obligation / avg_income, 4) if avg_income > 0 else None,
+        "income_volatility": round(volatility, 4) if volatility is not None else None,
+        "betting_to_income": summary["behaviour"]["betting_to_income"],
+        "expenses_to_income": summary["behaviour"]["expenses_to_income"],
+    }
+
     return ScoreResult(
         credit_score=score,
         grade=_grade(score),
@@ -131,5 +143,6 @@ def score_statement(
             "avg_monthly_income": round(avg_income, 2),
             "crb_obligation": crb_obligation,
             "qualified_amount": round(qualified, 0),
+            "ratios": ratios,
         },
     )

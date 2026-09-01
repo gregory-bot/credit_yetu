@@ -15,7 +15,7 @@ from app.config import settings
 from app.core.errors import AppError, NotFound
 from app.core.responses import accepted, ok
 from app.database import get_db
-from app.models import Organization, Statement
+from app.models import Customer, Organization, Statement
 from app.services.ml.shadow import shadow_predict
 from app.services.pipeline import process_statement
 
@@ -65,9 +65,19 @@ async def upload_statement(
                 raise AppError(f"File exceeds maximum size of {settings.max_upload_mb} MB.", 413)
             out.write(chunk)
 
+    # Link to an existing customer profile by national_id, if one exists for
+    # this org — lets a customer's detail page show their statement/score
+    # history without a separate lookup endpoint.
+    customer = None
+    if national_id:
+        customer = db.scalar(
+            select(Customer).where(Customer.organization_id == org.id, Customer.national_id == national_id)
+        )
+
     stmt = Statement(
         reference_id=ref,
         organization_id=org.id,
+        customer_id=customer.id if customer else None,
         national_id=national_id,
         statement_type=stype,
         source=stype,
@@ -86,6 +96,44 @@ async def upload_statement(
         {"reference_id": str(ref), "status": "received", "poll_url": f"{settings.api_v1_prefix}/statements/{ref}"},
         message="Statement received and queued for processing",
     )
+
+
+@router.get("")
+def list_statements(
+    national_id: str | None = None,
+    org: Organization = Depends(get_current_org),
+    db: Session = Depends(get_db),
+):
+    """List this org's statements, newest first (capped at 200).
+
+    Pass ``?national_id=`` to scope to one customer — this is how a customer
+    detail page gets its statement/score history, without a separate
+    per-customer endpoint.
+    """
+    query = select(Statement).where(Statement.organization_id == org.id)
+    if national_id:
+        query = query.where(Statement.national_id == national_id)
+    rows = db.scalars(query.order_by(Statement.created_at.desc()).limit(200)).all()
+    return ok([
+        {
+            "reference_id": str(s.reference_id),
+            "statement_type": s.statement_type,
+            "status": s.status,
+            "national_id": s.national_id,
+            "account_holder": s.account_holder,
+            "needs_review": s.needs_review,
+            "created_at": s.created_at.isoformat(),
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            "score": {
+                "credit_score": s.score.credit_score,
+                "grade": s.score.grade,
+                "avg_monthly_income": s.score.avg_monthly_income,
+                "limit_low": s.score.limit_low,
+                "limit_high": s.score.limit_high,
+            } if s.score else None,
+        }
+        for s in rows
+    ])
 
 
 def _statement_or_404(reference_id: str, org: Organization, db: Session) -> Statement:
@@ -128,7 +176,7 @@ def statement_score(reference_id: str, org: Organization = Depends(get_current_o
             "credit_score": s.credit_score,
             "grade": s.grade,
             "probability": s.probability,
-            "loan_limit": {"low": s.limit_low, "high": s.limit_high},
+            "affordability": {"low": s.limit_low, "high": s.limit_high},
             "avg_monthly_income": s.avg_monthly_income,
             "dti_pct": s.dti_pct,
             "month_count": s.month_count,

@@ -43,6 +43,22 @@ def rule_income_level(summary: dict, avg_monthly_income: float) -> RuleOutcome:
     return RuleOutcome("INCOME_STRONG", 15, f"Avg monthly income {avg_monthly_income:,.0f}.")
 
 
+def income_volatility(summary: dict) -> float | None:
+    """Coefficient of variation of monthly received amounts — ``None`` when
+    there isn't enough history to judge it (mirrors the threshold
+    ``rule_income_stability`` itself uses). Exposed separately so it can be
+    surfaced as its own ratio (e.g. in the scorecard) rather than living only
+    inside that rule's free-text detail string.
+    """
+    monthly = list(summary["trends"]["received"].values())
+    if len(monthly) < 3:
+        return None
+    mean = statistics.mean(monthly)
+    if mean <= 0:
+        return None
+    return statistics.pstdev(monthly) / mean
+
+
 def rule_income_stability(summary: dict) -> RuleOutcome:
     monthly = list(summary["trends"]["received"].values())
     if len(monthly) < 3:
@@ -50,7 +66,7 @@ def rule_income_stability(summary: dict) -> RuleOutcome:
     mean = statistics.mean(monthly)
     if mean <= 0:
         return RuleOutcome("INCOME_UNSTABLE", -20, "No positive monthly income.")
-    cv = statistics.pstdev(monthly) / mean
+    cv = income_volatility(summary)
     if cv < 0.4:
         return RuleOutcome("INCOME_STABLE", 40, f"Coefficient of variation {cv:.2f}.")
     if cv > 1.0:

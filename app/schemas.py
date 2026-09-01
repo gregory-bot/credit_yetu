@@ -10,7 +10,22 @@ from pydantic import BaseModel, EmailStr, Field
 class OrgSignup(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
     account_type: Literal["personal", "business"] = "business"
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=10)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class ApiKeyCreate(BaseModel):

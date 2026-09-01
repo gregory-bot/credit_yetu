@@ -15,10 +15,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from openpyxl import Workbook
+from openpyxl.chart import PieChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.config import settings
+from app.services.summary.financial_summary import breakdown_slices
 
 # Font name only — Excel doesn't embed fonts the way a PDF must, so this is
 # safe to set even on a machine without Consolas installed; Excel silently
@@ -92,7 +94,7 @@ def build_financial_workbook(statement, score) -> str:
     row += 1
     ws.cell(row=row, column=1,
             value=f"Credit score: {score.credit_score}  |  Grade: {score.grade}  |  "
-                  f"Limit: {score.limit_low:,.0f}–{score.limit_high:,.0f}  |  "
+                  f"Affordability: {score.limit_low:,.0f}–{score.limit_high:,.0f}  |  "
                   f"Needs review: {'Yes' if statement.needs_review else 'No'}")
     row += 2
 
@@ -112,7 +114,10 @@ def build_financial_workbook(statement, score) -> str:
     lending = summary.get("lending", {})
     period = summary.get("period", {})
     fraud = score.fraud_data or {}
+    ratios = (score.score_breakdown or {}).get("ratios", {})
     for label, value in [
+        ("Debt to Income", ratios.get("debt_to_income")),
+        ("Income Volatility", ratios.get("income_volatility")),
         ("Total received", totals.get("total_received", 0)),
         ("Total sent", totals.get("total_sent", 0)),
         ("Net position", totals.get("net_position", 0)),
@@ -152,6 +157,37 @@ def build_financial_workbook(statement, score) -> str:
         ws.cell(row=row, column=3, value=vals.get("out", 0))
         ws.cell(row=row, column=4, value=vals.get("count", 0))
         row += 1
+
+    # Breakdown block (Betting / Salary / Loans / Remittance / Other) — the
+    # same curated slices the PDF's donut chart uses, so the two can never
+    # show a different breakdown of the same statement. Charted natively so
+    # it's a real, editable Excel pie chart, not a picture of one.
+    slices = breakdown_slices(summary)
+    if slices:
+        row += 1
+        breakdown_header_row = row
+        ws.cell(row=row, column=1, value="Category")
+        ws.cell(row=row, column=2, value="Amount")
+        ws.cell(row=row, column=3, value="% of activity")
+        _style_header(ws, row, 3)
+        row += 1
+        breakdown_first_data_row = row
+        for s in slices:
+            ws.cell(row=row, column=1, value=s["label"])
+            ws.cell(row=row, column=2, value=s["value"])
+            ws.cell(row=row, column=3, value=s["pct"])
+            ws.cell(row=row, column=3).number_format = "0%"
+            row += 1
+        breakdown_last_data_row = row - 1
+
+        chart = PieChart()
+        chart.title = "Financial Breakdown"
+        chart.height, chart.width = 7, 10
+        data = Reference(ws, min_col=2, min_row=breakdown_header_row, max_row=breakdown_last_data_row)
+        labels = Reference(ws, min_col=1, min_row=breakdown_first_data_row, max_row=breakdown_last_data_row)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(labels)
+        ws.add_chart(chart, f"F{breakdown_header_row}")
 
     # Monthly cashflow trend block (headline received/sent/balance only —
     # see the "Monthly Detail" sheet for the full Credits/Loans/Outliers/Net

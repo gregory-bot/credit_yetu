@@ -55,6 +55,28 @@ def _log(db: Session, org: Organization, check_type: str, identifier: str | None
     return v
 
 
+@router.get("")
+def list_verifications(org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
+    """List this org's past verifications, newest first (capped at 200) —
+    covers every check type, including /business/verify's."""
+    rows = db.scalars(
+        select(Verification).where(Verification.organization_id == org.id)
+        .order_by(Verification.created_at.desc()).limit(200)
+    ).all()
+    return ok([
+        {
+            "reference_id": str(v.reference_id),
+            "check_type": v.check_type,
+            "identifier": v.identifier,
+            "provider": v.provider,
+            "status": v.status,
+            "consent_collected_by": v.consent_collected_by,
+            "created_at": v.created_at.isoformat(),
+        }
+        for v in rows
+    ])
+
+
 @router.get("/{reference_id}")
 def get_verification(reference_id: str, org: Organization = Depends(get_current_org), db: Session = Depends(get_db)):
     """Fetch a past verification result by its reference_id.

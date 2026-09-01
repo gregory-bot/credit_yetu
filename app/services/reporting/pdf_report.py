@@ -31,6 +31,7 @@ from reportlab.platypus import (
 
 from app.config import settings
 from app.services.reporting.fonts import register_consolas
+from app.services.summary.financial_summary import breakdown_slices
 
 _MONO = register_consolas()
 _MONO_BOLD = _MONO + "-Bold" if _MONO != "Courier" else "Courier-Bold"
@@ -279,6 +280,45 @@ def _flagged_transactions_table(statement) -> Table | None:
     return t
 
 
+# --- Breakdown donut (Betting / Salary / Loans / Remittance / Other) ------
+def _breakdown_donut(slices: list[dict]) -> Drawing | None:
+    if not slices:
+        return None
+    width, height = 56 * mm, 52 * mm
+    cx, cy = width / 2, height / 2
+    outer_r, inner_r = 23 * mm, 12.5 * mm
+    d = Drawing(width, height)
+    start = 90.0
+    for s in slices:
+        end = start - s["pct"] * 360
+        d.add(Wedge(cx, cy, outer_r, end, start, radius1=inner_r,
+                     fillColor=colors.HexColor(s["color"]), strokeColor=colors.white, strokeWidth=0.8))
+        start = end
+    return d
+
+
+def _breakdown_legend(slices: list[dict]) -> Table:
+    rows = []
+    for s in slices:
+        swatch = Table([[""]], colWidths=[3 * mm], rowHeights=[3 * mm])
+        swatch.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(s["color"])),
+            ("BOX", (0, 0), (-1, -1), 0.3, colors.HexColor("#B9B3DC")),
+        ]))
+        rows.append([
+            swatch,
+            Paragraph(f"<b>{s['label']}</b> {s['pct'] * 100:.0f}%<br/>"
+                      f"<font color='#6B7280'>{_money0(s['value'])}</font>", _styles["CellSmall"]),
+        ])
+    t = Table(rows, colWidths=(5 * mm, 51 * mm))
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+    ]))
+    return t
+
+
 def build_scorecard_pdf(statement, score) -> str:
     out_dir = settings.storage_path / "reports"
     path = str(out_dir / f"scorecard_{statement.reference_id}.pdf")
@@ -314,10 +354,10 @@ def build_scorecard_pdf(statement, score) -> str:
     ]))
     story += [status_bar, Spacer(1, 3 * mm)]
 
-    # --- Headline: loan limit on the left, score gauge on the right ---
+    # --- Headline: affordability on the left, score gauge on the right ---
     headline = Table(
         [[
-            _stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "LOAN LIMIT",
+            _stat_card(f"{_money0(score.limit_low)} – {_money0(score.limit_high)}", "AFFORDABILITY",
                        76 * mm, value_font_size=14),
             _score_gauge(score.credit_score, score.grade),
         ]],
@@ -344,6 +384,7 @@ def build_scorecard_pdf(statement, score) -> str:
 
     # --- Monthly financial reconciliation ---
     summary = score.financial_summary or {}
+    breakdown = score.score_breakdown or {}
     monthly = summary.get("monthly_detail") or {}
     if monthly.get("rows"):
         story.append(_section("Client Financial Summary"))
@@ -358,9 +399,33 @@ def build_scorecard_pdf(statement, score) -> str:
             ))
         story.append(Spacer(1, 3 * mm))
 
+    # --- Breakdown (donut) + Important Ratios, side by side ---
+    slices = breakdown_slices(summary)
+    ratios = breakdown.get("ratios", {})
+
+    def _ratio(v):
+        return f"{v:.2f}" if v is not None else "—"
+
+    ratios_panel = _kv_table([
+        ("Debt to Income", _ratio(ratios.get("debt_to_income"))),
+        ("Income Volatility", _ratio(ratios.get("income_volatility"))),
+        ("Betting to Income", _ratio(ratios.get("betting_to_income"))),
+        ("Expenses to Income", _ratio(ratios.get("expenses_to_income"))),
+    ], col_widths=(40 * mm, 30 * mm))
+
+    if slices:
+        story.append(_section("Breakdown & Important Ratios"))
+        donut = _breakdown_donut(slices)
+        legend = _breakdown_legend(slices)
+        breakdown_panel = Table([[donut, legend]], colWidths=(58 * mm, 56 * mm))
+        breakdown_panel.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        row = Table([[breakdown_panel, ratios_panel]], colWidths=(116 * mm, 70 * mm))
+        row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        story.append(row)
+        story.append(Spacer(1, 3 * mm))
+
     # --- Score card data ---
     story.append(_section("Score Card Data"))
-    breakdown = score.score_breakdown or {}
     story.append(_kv_table([
         ("Avg monthly income (qualifying)", _money(score.avg_monthly_income)),
         ("DTI %", f"{score.dti_pct:.0%}" if score.dti_pct is not None else "—"),

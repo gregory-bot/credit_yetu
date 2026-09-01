@@ -60,7 +60,7 @@ def score_transactions(
             "credit_score": result.credit_score,
             "grade": result.grade,
             "probability": result.probability,
-            "loan_limit": {"low": result.limit_low, "high": result.limit_high},
+            "affordability": {"low": result.limit_low, "high": result.limit_high},
             "avg_monthly_income": result.avg_monthly_income,
             "dti_pct": result.dti_pct,
         },

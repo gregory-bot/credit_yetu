@@ -9,6 +9,9 @@ psycopg2-binary==2.9.9
 pydantic==2.9.2
 pydantic-settings==2.5.2
 email-validator==2.2.0            # required for pydantic's EmailStr (schemas.py)
+bcrypt==4.2.0                      # password hashing (auth.py) — separate from the API-key SHA256
+                                    # hash in core/security.py, which is fine for high-entropy random
+                                    # keys but wrong for user-chosen passwords, which need a slow hash.
 
 # --- Statement extraction ---
 pdfplumber==0.11.4               # deterministic text + table extraction
