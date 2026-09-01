@@ -25,7 +25,13 @@ export const Route = createFileRoute("/verify")({
   component: VerifyPage,
 });
 
-type CheckResult = { label: string; ok: boolean | null; data: any } | null;
+type CheckResult = {
+  label: string;
+  ok: boolean | null;
+  data: any;
+  sandbox?: boolean;
+  provider?: string;
+} | null;
 
 function StepTitle({ step, children }: { step: number; children: string }) {
   return (
@@ -83,6 +89,28 @@ function ImagePreview({
       </div>
     </div>
   );
+}
+
+/**
+ * `accept="image/*"` on the file input is only a hint — the OS picker's "All
+ * Files" option, or a drag-and-drop, can still hand back a PDF scan of an ID.
+ * An `<img>` can't render that (shows a broken-image icon), and a real KYC
+ * face-match provider needs actual image bytes too — so reject it here with
+ * a clear reason instead of silently producing a dead preview.
+ */
+function pickImageFile(
+  input: HTMLInputElement,
+  setFile: (file: File | null) => void,
+  label: string,
+) {
+  const file = input.files?.[0] ?? null;
+  if (file && !file.type.startsWith("image/")) {
+    toast.error(`${label} must be a photo (JPG or PNG) — "${file.name}" isn't an image.`);
+    input.value = "";
+    setFile(null);
+    return;
+  }
+  setFile(file);
 }
 
 function resultEntries(data: unknown) {
@@ -149,7 +177,13 @@ function VerifyPage() {
         body: { identifier: nationalId, ...consentPayload() },
       }),
     onSuccess: (data) => {
-      setIdentityResult({ label: "Official record (IPRS)", ok: true, data: data.data });
+      setIdentityResult({
+        label: "Official record (IPRS)",
+        ok: true,
+        data: data.data,
+        sandbox: data.sandbox,
+        provider: data.provider,
+      });
       recent.refetch();
       toast.success("Identity verified");
     },
@@ -169,7 +203,13 @@ function VerifyPage() {
       return api<any>("/verify/face-match", { method: "POST", form });
     },
     onSuccess: (data) => {
-      setFaceResult({ label: "Face match", ok: data.data?.is_match ?? null, data: data.data });
+      setFaceResult({
+        label: "Face match",
+        ok: data.data?.is_match ?? null,
+        data: data.data,
+        sandbox: data.sandbox,
+        provider: data.provider,
+      });
       recent.refetch();
     },
     onError: (err) => toast.error(describeError(err)),
@@ -182,7 +222,13 @@ function VerifyPage() {
         body: { identifier: nationalId, search_type: "id", ...consentPayload() },
       }),
     onSuccess: (data) => {
-      setKraResult({ label: "KRA PIN", ok: true, data: data.data });
+      setKraResult({
+        label: "KRA PIN",
+        ok: true,
+        data: data.data,
+        sandbox: data.sandbox,
+        provider: data.provider,
+      });
       recent.refetch();
     },
     onError: (err) => toast.error(describeError(err)),
@@ -195,7 +241,13 @@ function VerifyPage() {
         body: { identifier: nationalId, full: false, ...consentPayload() },
       }),
     onSuccess: (data) => {
-      setCrbResult({ label: "CRB score (Metropol)", ok: true, data: data.data });
+      setCrbResult({
+        label: "CRB score (Metropol)",
+        ok: true,
+        data: data.data,
+        sandbox: data.sandbox,
+        provider: data.provider,
+      });
       recent.refetch();
     },
     onError: (err) => toast.error(describeError(err)),
@@ -210,7 +262,13 @@ function VerifyPage() {
       });
     },
     onSuccess: (data) => {
-      setPhoneResult({ label: "Phone check", ok: data.data?.is_valid ?? null, data: data.data });
+      setPhoneResult({
+        label: "Phone check",
+        ok: data.data?.is_valid ?? null,
+        data: data.data,
+        sandbox: data.sandbox,
+        provider: data.provider,
+      });
       recent.refetch();
     },
     onError: (err) => toast.error(describeError(err)),
@@ -305,7 +363,7 @@ function VerifyPage() {
                         id="id_image"
                         type="file"
                         accept="image/*"
-                        onChange={(e) => setIdImage(e.target.files?.[0] ?? null)}
+                        onChange={(e) => pickImageFile(e.target, setIdImage, "ID card photo")}
                       />
                     </div>
                     <div className="space-y-2">
@@ -314,7 +372,7 @@ function VerifyPage() {
                         id="selfie"
                         type="file"
                         accept="image/*"
-                        onChange={(e) => setSelfie(e.target.files?.[0] ?? null)}
+                        onChange={(e) => pickImageFile(e.target, setSelfie, "Client selfie")}
                       />
                     </div>
                   </div>
@@ -428,7 +486,14 @@ function VerifyPage() {
           </SectionCard>
 
           {pastResult && (
-            <SectionCard title="Selected result">
+            <SectionCard
+              title={
+                <span className="flex items-center gap-2">
+                  Selected result
+                  {pastResult.data?.sandbox && <SandboxBadge />}
+                </span>
+              }
+            >
               <KeyValue items={resultEntries(pastResult.data?.data ?? pastResult.data)} />
             </SectionCard>
           )}
@@ -453,13 +518,33 @@ function ResultCard({ result }: { result: CheckResult }) {
 
   return (
     <div className="rounded-lg border border-border bg-muted/30 p-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {result.label}
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {result.label}
+          </p>
+          {result.sandbox && <SandboxBadge />}
+        </div>
         {badge}
       </div>
-      <KeyValue items={resultEntries(result.data)} />
+      {result.sandbox && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Sandbox result — a synthetic response from the built-in mock provider, not a real{" "}
+          {result.label.toLowerCase()} lookup. Switch <code className="num">KYC_PROVIDER</code> to a
+          live provider to check against real records.
+        </p>
+      )}
+      <div className="mt-2">
+        <KeyValue items={resultEntries(result.data)} />
+      </div>
     </div>
+  );
+}
+
+function SandboxBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[color:oklch(0.55_0.12_74.5)]">
+      Sandbox
+    </span>
   );
 }
